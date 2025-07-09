@@ -182,7 +182,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-05")
+        self.setWindowTitle("音乐播放器:2025/07/09-06")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -767,14 +767,12 @@ class MusicPlayer(QMainWindow):
         # 当歌曲播放结束时
         if status == QMediaPlayer.EndOfMedia:
             if self.play_mode == 1:  # 单曲循环模式
-                if self.user_manual_skip:
-                    # 用户手动跳转后，重置标记，下次自然结束时继续循环
-                    self.user_manual_skip = False
-                else:
-                    # 自然播放结束，重复播放当前歌曲
-                    current_index = self.playlist.currentIndex()
-                    self.playlist.setCurrentIndex(current_index)
-                    self.player.play()
+                # 无论是否手动跳转，播放结束后都进行单曲循环
+                current_index = self.playlist.currentIndex()
+                self.playlist.setCurrentIndex(current_index)
+                self.player.play()
+                # 重置手动跳转标记，确保下次也能正常循环
+                self.user_manual_skip = False
 
     def format_time(self, ms):
         """格式化时间"""
