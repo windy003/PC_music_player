@@ -16,7 +16,7 @@ from mutagen.id3 import ID3NoHeaderError
 class MusicPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器")
+        self.setWindowTitle("音乐播放器:2025/07/09-01")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置默认最大化
