@@ -206,6 +206,9 @@ class MusicPlayer(QMainWindow):
         # 播放模式 0:顺序播放 1:单曲循环 2:随机播放
         self.play_mode = 0
         
+        # 单曲循环模式下的用户操作标记
+        self.user_manual_skip = False
+        
         # 歌曲信息列表
         self.song_list = []
         
@@ -281,9 +284,9 @@ class MusicPlayer(QMainWindow):
         top_layout.addWidget(mode_label)
         
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["顺序播放", "单曲循环", "随机播放"])
+        self.mode_combo.addItems(["顺序播放", "智能单曲循环", "随机播放"])
         self.mode_combo.currentIndexChanged.connect(self.change_play_mode)
-        self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)")
+        self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)\n智能单曲循环: 自然播放结束时循环，手动切换时随机跳转")
         top_layout.addWidget(self.mode_combo)
         
         # 全局快捷键设置按钮
@@ -513,6 +516,7 @@ class MusicPlayer(QMainWindow):
         self.player.positionChanged.connect(self.position_changed)
         self.player.durationChanged.connect(self.duration_changed)
         self.playlist.currentIndexChanged.connect(self.playlist_position_changed)
+        self.player.mediaStatusChanged.connect(self.media_status_changed)
 
     def open_file(self):
         """打开音频文件"""
@@ -605,6 +609,8 @@ class MusicPlayer(QMainWindow):
         index = self.playlist_widget.row(item)
         self.playlist.setCurrentIndex(index)
         self.player.play()
+        # 重置手动跳转标记
+        self.user_manual_skip = False
 
     def toggle_play(self):
         """切换播放/暂停"""
@@ -617,12 +623,18 @@ class MusicPlayer(QMainWindow):
         """上一曲"""
         if self.play_mode == 2:  # 随机播放
             self.play_random_song()
+        elif self.play_mode == 1:  # 单曲循环模式下的智能跳转
+            self.user_manual_skip = True
+            self.play_random_song()
         else:
             self.playlist.previous()
 
     def next_song(self):
         """下一曲"""
         if self.play_mode == 2:  # 随机播放
+            self.play_random_song()
+        elif self.play_mode == 1:  # 单曲循环模式下的智能跳转
+            self.user_manual_skip = True
             self.play_random_song()
         else:
             self.playlist.next()
@@ -638,8 +650,9 @@ class MusicPlayer(QMainWindow):
         self.play_mode = index
         if index == 0:  # 顺序播放
             self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)
-        elif index == 1:  # 单曲循环
-            self.playlist.setPlaybackMode(QMediaPlaylist.CurrentItemInLoop)
+        elif index == 1:  # 单曲循环（智能模式）
+            self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)  # 改为Sequential以便手动控制
+            self.user_manual_skip = False  # 重置手动跳转标记
         elif index == 2:  # 随机播放
             self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)
         
@@ -660,6 +673,8 @@ class MusicPlayer(QMainWindow):
         current_mode = self.mode_combo.currentIndex()
         next_mode = (current_mode + 1) % 3
         self.mode_combo.setCurrentIndex(next_mode)
+        # 重置手动跳转标记
+        self.user_manual_skip = False
 
     def show_mode_dropdown(self):
         """显示播放模式下拉菜单"""
@@ -744,6 +759,22 @@ class MusicPlayer(QMainWindow):
             
             # 保存当前播放位置
             self.settings.setValue("current_index", position)
+
+    def media_status_changed(self, status):
+        """媒体状态改变处理"""
+        from PyQt5.QtMultimedia import QMediaPlayer
+        
+        # 当歌曲播放结束时
+        if status == QMediaPlayer.EndOfMedia:
+            if self.play_mode == 1:  # 单曲循环模式
+                if self.user_manual_skip:
+                    # 用户手动跳转后，重置标记，下次自然结束时继续循环
+                    self.user_manual_skip = False
+                else:
+                    # 自然播放结束，重复播放当前歌曲
+                    current_index = self.playlist.currentIndex()
+                    self.playlist.setCurrentIndex(current_index)
+                    self.player.play()
 
     def format_time(self, ms):
         """格式化时间"""
