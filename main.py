@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QWidget, QPushButton, QLabel, QSlider, QListWidget, 
                              QFileDialog, QMessageBox, QSystemTrayIcon, QMenu, 
                              QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut)
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
 import mutagen
@@ -25,7 +25,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-02")
+        self.setWindowTitle("音乐播放器:2025/07/09-03")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -52,6 +52,9 @@ class MusicPlayer(QMainWindow):
         # 歌曲信息列表
         self.song_list = []
         
+        # 初始化设置
+        self.settings = QSettings("MusicPlayer", "PlaylistMemory")
+        
         # 初始化UI
         self.init_ui()
         
@@ -68,6 +71,9 @@ class MusicPlayer(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
         self.timer.start(1000)
+        
+        # 加载上次的播放列表
+        self.load_last_playlist()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -285,6 +291,8 @@ class MusicPlayer(QMainWindow):
         
         if file_paths:
             self.add_files_to_playlist(file_paths)
+            # 保存播放列表
+            self.save_playlist()
 
     def open_folder(self):
         """打开文件夹"""
@@ -301,6 +309,8 @@ class MusicPlayer(QMainWindow):
             
             if file_paths:
                 self.add_files_to_playlist(file_paths)
+                # 保存播放列表
+                self.save_playlist()
             else:
                 QMessageBox.information(self, "提示", "所选文件夹中没有找到音频文件")
 
@@ -399,12 +409,18 @@ class MusicPlayer(QMainWindow):
             self.playlist.setPlaybackMode(QMediaPlaylist.CurrentItemInLoop)
         elif index == 2:  # 随机播放
             self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)
+        
+        # 保存播放模式
+        self.settings.setValue("play_mode", self.play_mode)
 
     def change_volume(self, value):
         """改变音量"""
         self.volume = value
         self.player.setVolume(value)
         self.volume_label.setText(f"{value}%")
+        
+        # 保存音量设置
+        self.settings.setValue("volume", self.volume)
 
     def cycle_play_mode(self):
         """循环切换播放模式"""
@@ -490,6 +506,9 @@ class MusicPlayer(QMainWindow):
                     item.setBackground(Qt.lightGray)
                 else:
                     item.setBackground(Qt.white)
+            
+            # 保存当前播放位置
+            self.settings.setValue("current_index", position)
 
     def format_time(self, ms):
         """格式化时间"""
@@ -515,8 +534,67 @@ class MusicPlayer(QMainWindow):
             self.hide()
             event.ignore()
 
+    def save_playlist(self):
+        """保存当前播放列表"""
+        if self.song_list:
+            # 保存歌曲路径列表
+            song_paths = [song['path'] for song in self.song_list]
+            self.settings.setValue("playlist", song_paths)
+            
+            # 保存当前播放位置
+            current_index = self.playlist.currentIndex()
+            self.settings.setValue("current_index", current_index)
+            
+            # 保存播放模式
+            self.settings.setValue("play_mode", self.play_mode)
+            
+            # 保存音量
+            self.settings.setValue("volume", self.volume)
+            
+            print(f"已保存播放列表，共{len(song_paths)}首歌曲")
+
+    def load_last_playlist(self):
+        """加载上次的播放列表"""
+        song_paths = self.settings.value("playlist", [])
+        
+        if song_paths and isinstance(song_paths, list):
+            # 过滤存在的文件
+            existing_paths = []
+            for path in song_paths:
+                if os.path.exists(path):
+                    existing_paths.append(path)
+                else:
+                    print(f"文件不存在，跳过: {path}")
+            
+            if existing_paths:
+                # 添加到播放列表
+                self.add_files_to_playlist(existing_paths)
+                
+                # 恢复播放位置
+                current_index = self.settings.value("current_index", 0, type=int)
+                if 0 <= current_index < self.playlist.mediaCount():
+                    self.playlist.setCurrentIndex(current_index)
+                
+                # 恢复播放模式
+                play_mode = self.settings.value("play_mode", 0, type=int)
+                if 0 <= play_mode <= 2:
+                    self.mode_combo.setCurrentIndex(play_mode)
+                
+                # 恢复音量
+                volume = self.settings.value("volume", 70, type=int)
+                if 0 <= volume <= 100:
+                    self.volume_slider.setValue(volume)
+                
+                print(f"已加载上次播放列表，共{len(existing_paths)}首歌曲")
+            else:
+                print("上次播放列表中的文件都不存在")
+        else:
+            print("没有找到上次的播放列表")
+
     def quit_application(self):
         """退出应用程序"""
+        # 保存当前播放列表
+        self.save_playlist()
         self.tray_icon.hide()
         QApplication.quit()
 
