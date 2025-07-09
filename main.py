@@ -371,7 +371,7 @@ class MusicPlayer(QMainWindow):
         # 控制按钮
         control_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("上一曲 (Alt+B)")
+        self.prev_btn = QPushButton("上一曲 (Alt+←)")
         self.prev_btn.clicked.connect(self.previous_song)
         control_layout.addWidget(self.prev_btn)
         
@@ -379,7 +379,7 @@ class MusicPlayer(QMainWindow):
         self.play_btn.clicked.connect(self.toggle_play)
         control_layout.addWidget(self.play_btn)
         
-        self.next_btn = QPushButton("下一曲 (Alt+N)")
+        self.next_btn = QPushButton("下一曲 (Alt+→)")
         self.next_btn.clicked.connect(self.next_song)
         control_layout.addWidget(self.next_btn)
         
@@ -387,12 +387,12 @@ class MusicPlayer(QMainWindow):
         
         # 音量控制
         volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("音量 (Alt+U/D):"))
+        volume_layout.addWidget(QLabel("音量 (Alt+↑/↓):"))
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(self.volume)
         self.volume_slider.valueChanged.connect(self.change_volume)
-        self.volume_slider.setToolTip("音量调节 (Alt+U增加, Alt+D减少)")
+        self.volume_slider.setToolTip("音量调节 (Alt+↑增加, Alt+↓减少)")
         volume_layout.addWidget(self.volume_slider)
         self.volume_label = QLabel(f"{self.volume}%")
         volume_layout.addWidget(self.volume_label)
@@ -458,12 +458,12 @@ class MusicPlayer(QMainWindow):
         self.play_shortcut = QShortcut(QKeySequence("Alt+P"), self)
         self.play_shortcut.activated.connect(self.toggle_play)
         
-        # Alt+B: 上一曲
-        self.prev_shortcut = QShortcut(QKeySequence("Alt+B"), self)
+        # Alt+Left: 上一曲
+        self.prev_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
         self.prev_shortcut.activated.connect(self.previous_song)
         
-        # Alt+N: 下一曲
-        self.next_shortcut = QShortcut(QKeySequence("Alt+N"), self)
+        # Alt+Right: 下一曲
+        self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
         self.next_shortcut.activated.connect(self.next_song)
         
         # Alt+M: 切换播放模式
@@ -474,12 +474,12 @@ class MusicPlayer(QMainWindow):
         self.mode_dropdown_shortcut = QShortcut(QKeySequence("Alt+L"), self)
         self.mode_dropdown_shortcut.activated.connect(self.show_mode_dropdown)
         
-        # Alt+U: 音量增加
-        self.volume_up_shortcut = QShortcut(QKeySequence("Alt+U"), self)
+        # Alt+Up: 音量增加
+        self.volume_up_shortcut = QShortcut(QKeySequence("Alt+Up"), self)
         self.volume_up_shortcut.activated.connect(self.volume_up)
         
-        # Alt+D: 音量减少
-        self.volume_down_shortcut = QShortcut(QKeySequence("Alt+D"), self)
+        # Alt+Down: 音量减少
+        self.volume_down_shortcut = QShortcut(QKeySequence("Alt+Down"), self)
         self.volume_down_shortcut.activated.connect(self.volume_down)
         
         # 空格键: 播放/暂停
