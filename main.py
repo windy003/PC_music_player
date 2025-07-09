@@ -4,9 +4,9 @@ import random
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QSlider, QListWidget, 
                              QFileDialog, QMessageBox, QSystemTrayIcon, QMenu, 
-                             QAction, QComboBox, QSplitter, QListWidgetItem)
+                             QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut)
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap, QFont
+from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
 import mutagen
 from mutagen.mp3 import MP3
@@ -18,6 +18,9 @@ class MusicPlayer(QMainWindow):
         super().__init__()
         self.setWindowTitle("音乐播放器")
         self.setGeometry(100, 100, 800, 600)
+        
+        # 设置默认最大化
+        self.showMaximized()
         
         # 初始化媒体播放器
         self.player = QMediaPlayer()
@@ -42,6 +45,9 @@ class MusicPlayer(QMainWindow):
         # 初始化系统托盘
         self.init_tray()
         
+        # 初始化快捷键
+        self.init_shortcuts()
+        
         # 连接信号
         self.connect_signals()
         
@@ -62,12 +68,12 @@ class MusicPlayer(QMainWindow):
         top_layout = QHBoxLayout()
         
         # 打开文件按钮
-        self.open_file_btn = QPushButton("打开文件")
+        self.open_file_btn = QPushButton("打开文件 (Alt+O)")
         self.open_file_btn.clicked.connect(self.open_file)
         top_layout.addWidget(self.open_file_btn)
         
         # 打开文件夹按钮
-        self.open_folder_btn = QPushButton("打开文件夹")
+        self.open_folder_btn = QPushButton("打开文件夹 (Alt+F)")
         self.open_folder_btn.clicked.connect(self.open_folder)
         top_layout.addWidget(self.open_folder_btn)
         
@@ -75,6 +81,7 @@ class MusicPlayer(QMainWindow):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["顺序播放", "单曲循环", "随机播放"])
         self.mode_combo.currentIndexChanged.connect(self.change_play_mode)
+        self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)")
         top_layout.addWidget(self.mode_combo)
         
         top_layout.addStretch()
@@ -116,15 +123,15 @@ class MusicPlayer(QMainWindow):
         # 控制按钮
         control_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("上一曲")
+        self.prev_btn = QPushButton("上一曲 (Alt+B)")
         self.prev_btn.clicked.connect(self.previous_song)
         control_layout.addWidget(self.prev_btn)
         
-        self.play_btn = QPushButton("播放")
+        self.play_btn = QPushButton("播放 (Alt+P)")
         self.play_btn.clicked.connect(self.toggle_play)
         control_layout.addWidget(self.play_btn)
         
-        self.next_btn = QPushButton("下一曲")
+        self.next_btn = QPushButton("下一曲 (Alt+N)")
         self.next_btn.clicked.connect(self.next_song)
         control_layout.addWidget(self.next_btn)
         
@@ -132,11 +139,12 @@ class MusicPlayer(QMainWindow):
         
         # 音量控制
         volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("音量:"))
+        volume_layout.addWidget(QLabel("音量 (Alt+U/D):"))
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(self.volume)
         self.volume_slider.valueChanged.connect(self.change_volume)
+        self.volume_slider.setToolTip("音量调节 (Alt+U增加, Alt+D减少)")
         volume_layout.addWidget(self.volume_slider)
         self.volume_label = QLabel(f"{self.volume}%")
         volume_layout.addWidget(self.volume_label)
@@ -186,6 +194,44 @@ class MusicPlayer(QMainWindow):
         
         # 显示托盘图标
         self.tray_icon.show()
+
+    def init_shortcuts(self):
+        """初始化快捷键"""
+        # Alt+O: 打开文件
+        self.open_file_shortcut = QShortcut(QKeySequence("Alt+O"), self)
+        self.open_file_shortcut.activated.connect(self.open_file)
+        
+        # Alt+F: 打开文件夹
+        self.open_folder_shortcut = QShortcut(QKeySequence("Alt+F"), self)
+        self.open_folder_shortcut.activated.connect(self.open_folder)
+        
+        # Alt+P: 播放/暂停
+        self.play_shortcut = QShortcut(QKeySequence("Alt+P"), self)
+        self.play_shortcut.activated.connect(self.toggle_play)
+        
+        # Alt+B: 上一曲
+        self.prev_shortcut = QShortcut(QKeySequence("Alt+B"), self)
+        self.prev_shortcut.activated.connect(self.previous_song)
+        
+        # Alt+N: 下一曲
+        self.next_shortcut = QShortcut(QKeySequence("Alt+N"), self)
+        self.next_shortcut.activated.connect(self.next_song)
+        
+        # Alt+M: 切换播放模式
+        self.mode_shortcut = QShortcut(QKeySequence("Alt+M"), self)
+        self.mode_shortcut.activated.connect(self.cycle_play_mode)
+        
+        # Alt+L: 打开播放模式下拉菜单
+        self.mode_dropdown_shortcut = QShortcut(QKeySequence("Alt+L"), self)
+        self.mode_dropdown_shortcut.activated.connect(self.show_mode_dropdown)
+        
+        # Alt+U: 音量增加
+        self.volume_up_shortcut = QShortcut(QKeySequence("Alt+U"), self)
+        self.volume_up_shortcut.activated.connect(self.volume_up)
+        
+        # Alt+D: 音量减少
+        self.volume_down_shortcut = QShortcut(QKeySequence("Alt+D"), self)
+        self.volume_down_shortcut.activated.connect(self.volume_down)
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -324,6 +370,28 @@ class MusicPlayer(QMainWindow):
         self.player.setVolume(value)
         self.volume_label.setText(f"{value}%")
 
+    def cycle_play_mode(self):
+        """循环切换播放模式"""
+        current_mode = self.mode_combo.currentIndex()
+        next_mode = (current_mode + 1) % 3
+        self.mode_combo.setCurrentIndex(next_mode)
+
+    def show_mode_dropdown(self):
+        """显示播放模式下拉菜单"""
+        self.mode_combo.showPopup()
+
+    def volume_up(self):
+        """音量增加"""
+        current_volume = self.volume_slider.value()
+        new_volume = min(100, current_volume + 10)
+        self.volume_slider.setValue(new_volume)
+
+    def volume_down(self):
+        """音量减少"""
+        current_volume = self.volume_slider.value()
+        new_volume = max(0, current_volume - 10)
+        self.volume_slider.setValue(new_volume)
+
     def slider_pressed(self):
         """进度条被按下"""
         self.timer.stop()
@@ -344,10 +412,10 @@ class MusicPlayer(QMainWindow):
     def player_state_changed(self, state):
         """播放器状态改变"""
         if state == QMediaPlayer.PlayingState:
-            self.play_btn.setText("暂停")
+            self.play_btn.setText("暂停 (Alt+P)")
             self.is_playing = True
         else:
-            self.play_btn.setText("播放")
+            self.play_btn.setText("播放 (Alt+P)")
             self.is_playing = False
 
     def position_changed(self, position):
