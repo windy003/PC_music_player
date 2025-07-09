@@ -182,7 +182,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-06")
+        self.setWindowTitle("音乐播放器:2025/07/09-07")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -773,6 +773,10 @@ class MusicPlayer(QMainWindow):
                 self.player.play()
                 # 重置手动跳转标记，确保下次也能正常循环
                 self.user_manual_skip = False
+            elif self.play_mode == 2:  # 随机播放模式
+                # 歌曲自然播放结束时，随机播放下一首
+                self.play_random_song()
+                self.player.play()
 
     def format_time(self, ms):
         """格式化时间"""
