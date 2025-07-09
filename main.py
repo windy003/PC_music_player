@@ -26,7 +26,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-03")
+        self.setWindowTitle("音乐播放器:2025/07/09-04")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -121,14 +121,14 @@ class MusicPlayer(QMainWindow):
         
         # 搜索框
         search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("搜索:"))
+        search_layout.addWidget(QLabel("搜索 (Alt+S):"))
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("输入歌曲名称或艺术家...")
         self.search_box.textChanged.connect(self.filter_playlist)
         search_layout.addWidget(self.search_box)
         
         # 清除搜索按钮
-        clear_search_btn = QPushButton("清除")
+        clear_search_btn = QPushButton("清除 (Alt+C)")
         clear_search_btn.clicked.connect(self.clear_search)
         search_layout.addWidget(clear_search_btn)
         
@@ -140,6 +140,12 @@ class MusicPlayer(QMainWindow):
         self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self.show_context_menu)
         left_layout.addWidget(self.playlist_widget)
+        
+        # 播放列表快捷键提示
+        playlist_hint_label = QLabel("提示: Ctrl+R(重命名) Delete(删除) 双击播放")
+        playlist_hint_label.setStyleSheet("color: gray; font-size: 10px;")
+        playlist_hint_label.setAlignment(Qt.AlignCenter)
+        left_layout.addWidget(playlist_hint_label)
         
         splitter.addWidget(left_widget)
         
@@ -299,6 +305,22 @@ class MusicPlayer(QMainWindow):
         # 右方向键: 前进5秒
         self.right_shortcut = QShortcut(QKeySequence("Right"), self)
         self.right_shortcut.activated.connect(self.seek_forward)
+        
+        # Alt+S: 聚焦搜索框
+        self.search_shortcut = QShortcut(QKeySequence("Alt+S"), self)
+        self.search_shortcut.activated.connect(self.focus_search_box)
+        
+        # Alt+C: 清除搜索
+        self.clear_search_shortcut = QShortcut(QKeySequence("Alt+C"), self)
+        self.clear_search_shortcut.activated.connect(self.clear_search)
+        
+        # Ctrl+R: 重命名选中项
+        self.rename_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.rename_shortcut.activated.connect(self.rename_current_item)
+        
+        # Delete: 删除选中项
+        self.delete_shortcut = QShortcut(QKeySequence("Delete"), self)
+        self.delete_shortcut.activated.connect(self.delete_current_item)
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -665,6 +687,23 @@ class MusicPlayer(QMainWindow):
             item = self.playlist_widget.item(i)
             item.setHidden(False)
 
+    def focus_search_box(self):
+        """聚焦搜索框"""
+        self.search_box.setFocus()
+        self.search_box.selectAll()
+
+    def rename_current_item(self):
+        """重命名当前选中的项目"""
+        current_item = self.playlist_widget.currentItem()
+        if current_item:
+            self.rename_playlist_item(current_item)
+
+    def delete_current_item(self):
+        """删除当前选中的项目"""
+        current_item = self.playlist_widget.currentItem()
+        if current_item:
+            self.delete_playlist_item(current_item)
+
     def show_context_menu(self, position):
         """显示右键菜单"""
         item = self.playlist_widget.itemAt(position)
@@ -674,12 +713,12 @@ class MusicPlayer(QMainWindow):
         menu = QMenu()
         
         # 重命名动作
-        rename_action = QAction("重命名", self)
+        rename_action = QAction("重命名 (Ctrl+R)", self)
         rename_action.triggered.connect(lambda: self.rename_playlist_item(item))
         menu.addAction(rename_action)
         
         # 删除动作
-        delete_action = QAction("从列表中删除", self)
+        delete_action = QAction("从列表中删除 (Delete)", self)
         delete_action.triggered.connect(lambda: self.delete_playlist_item(item))
         menu.addAction(delete_action)
         
