@@ -129,6 +129,7 @@ class MusicPlayer(QMainWindow):
         self.progress_slider = QSlider(Qt.Horizontal)
         self.progress_slider.sliderPressed.connect(self.slider_pressed)
         self.progress_slider.sliderReleased.connect(self.slider_released)
+        self.progress_slider.setToolTip("进度条 (←后退5秒, →前进5秒)")
         self.total_time_label = QLabel("00:00")
         
         progress_layout.addWidget(self.time_label)
@@ -136,10 +137,16 @@ class MusicPlayer(QMainWindow):
         progress_layout.addWidget(self.total_time_label)
         right_layout.addLayout(progress_layout)
         
+        # 方向键提示
+        seek_hint_label = QLabel("提示: ←后退5秒 / →前进5秒")
+        seek_hint_label.setStyleSheet("color: gray; font-size: 10px;")
+        seek_hint_label.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(seek_hint_label)
+        
         # 控制按钮
         control_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("上一曲 (Alt+B/←)")
+        self.prev_btn = QPushButton("上一曲 (Alt+B)")
         self.prev_btn.clicked.connect(self.previous_song)
         control_layout.addWidget(self.prev_btn)
         
@@ -147,7 +154,7 @@ class MusicPlayer(QMainWindow):
         self.play_btn.clicked.connect(self.toggle_play)
         control_layout.addWidget(self.play_btn)
         
-        self.next_btn = QPushButton("下一曲 (Alt+N/→)")
+        self.next_btn = QPushButton("下一曲 (Alt+N)")
         self.next_btn.clicked.connect(self.next_song)
         control_layout.addWidget(self.next_btn)
         
@@ -254,13 +261,13 @@ class MusicPlayer(QMainWindow):
         self.space_shortcut = QShortcut(QKeySequence("Space"), self)
         self.space_shortcut.activated.connect(self.toggle_play)
         
-        # 左方向键: 上一曲
+        # 左方向键: 后退5秒
         self.left_shortcut = QShortcut(QKeySequence("Left"), self)
-        self.left_shortcut.activated.connect(self.previous_song)
+        self.left_shortcut.activated.connect(self.seek_backward)
         
-        # 右方向键: 下一曲
+        # 右方向键: 前进5秒
         self.right_shortcut = QShortcut(QKeySequence("Right"), self)
-        self.right_shortcut.activated.connect(self.next_song)
+        self.right_shortcut.activated.connect(self.seek_forward)
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -420,6 +427,19 @@ class MusicPlayer(QMainWindow):
         current_volume = self.volume_slider.value()
         new_volume = max(0, current_volume - 10)
         self.volume_slider.setValue(new_volume)
+
+    def seek_backward(self):
+        """后退5秒"""
+        current_position = self.player.position()
+        new_position = max(0, current_position - 5000)  # 5秒 = 5000毫秒
+        self.player.setPosition(new_position)
+
+    def seek_forward(self):
+        """前进5秒"""
+        current_position = self.player.position()
+        duration = self.player.duration()
+        new_position = min(duration, current_position + 5000)  # 5秒 = 5000毫秒
+        self.player.setPosition(new_position)
 
     def slider_pressed(self):
         """进度条被按下"""
