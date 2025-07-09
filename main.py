@@ -19,6 +19,9 @@ class MusicPlayer(QMainWindow):
         self.setWindowTitle("音乐播放器:2025/07/09-01")
         self.setGeometry(100, 100, 800, 600)
         
+        # 设置应用图标
+        self.setWindowIcon(QIcon("1328x1328.png"))
+        
         # 设置默认最大化
         self.showMaximized()
         
@@ -168,8 +171,8 @@ class MusicPlayer(QMainWindow):
         # 创建系统托盘图标
         self.tray_icon = QSystemTrayIcon(self)
         
-        # 设置图标（使用默认图标）
-        self.tray_icon.setIcon(self.style().standardIcon(self.style().SP_MediaPlay))
+        # 设置图标（使用自定义图标）
+        self.tray_icon.setIcon(QIcon("1328x1328.png"))
         
         # 创建托盘菜单
         tray_menu = QMenu()
@@ -478,6 +481,9 @@ class MusicPlayer(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 关闭最后一个窗口时不退出程序
+    
+    # 设置应用程序图标（用于任务栏）
+    app.setWindowIcon(QIcon("1328x1328.png"))
     
     player = MusicPlayer()
     player.show()
