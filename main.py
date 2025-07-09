@@ -139,15 +139,15 @@ class MusicPlayer(QMainWindow):
         # 控制按钮
         control_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("上一曲 (Alt+B)")
+        self.prev_btn = QPushButton("上一曲 (Alt+B/←)")
         self.prev_btn.clicked.connect(self.previous_song)
         control_layout.addWidget(self.prev_btn)
         
-        self.play_btn = QPushButton("播放 (Alt+P)")
+        self.play_btn = QPushButton("播放 (Alt+P/空格)")
         self.play_btn.clicked.connect(self.toggle_play)
         control_layout.addWidget(self.play_btn)
         
-        self.next_btn = QPushButton("下一曲 (Alt+N)")
+        self.next_btn = QPushButton("下一曲 (Alt+N/→)")
         self.next_btn.clicked.connect(self.next_song)
         control_layout.addWidget(self.next_btn)
         
@@ -249,6 +249,18 @@ class MusicPlayer(QMainWindow):
         # Alt+D: 音量减少
         self.volume_down_shortcut = QShortcut(QKeySequence("Alt+D"), self)
         self.volume_down_shortcut.activated.connect(self.volume_down)
+        
+        # 空格键: 播放/暂停
+        self.space_shortcut = QShortcut(QKeySequence("Space"), self)
+        self.space_shortcut.activated.connect(self.toggle_play)
+        
+        # 左方向键: 上一曲
+        self.left_shortcut = QShortcut(QKeySequence("Left"), self)
+        self.left_shortcut.activated.connect(self.previous_song)
+        
+        # 右方向键: 下一曲
+        self.right_shortcut = QShortcut(QKeySequence("Right"), self)
+        self.right_shortcut.activated.connect(self.next_song)
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -429,10 +441,10 @@ class MusicPlayer(QMainWindow):
     def player_state_changed(self, state):
         """播放器状态改变"""
         if state == QMediaPlayer.PlayingState:
-            self.play_btn.setText("暂停 (Alt+P)")
+            self.play_btn.setText("暂停 (Alt+P/空格)")
             self.is_playing = True
         else:
-            self.play_btn.setText("播放 (Alt+P)")
+            self.play_btn.setText("播放 (Alt+P/空格)")
             self.is_playing = False
 
     def position_changed(self, position):
