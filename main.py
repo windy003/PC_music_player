@@ -14,13 +14,23 @@ from mutagen.id3 import ID3NoHeaderError
 
 
 class MusicPlayer(QMainWindow):
+    def get_resource_path(self, relative_path):
+        """获取资源文件路径，支持PyInstaller打包"""
+        try:
+            # PyInstaller创建临时文件夹，将路径存储在_MEIPASS中
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("音乐播放器:2025/07/09-01")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
-        self.setWindowIcon(QIcon("1328x1328.png"))
+        icon_path = self.get_resource_path("1328x1328.png")
+        self.setWindowIcon(QIcon(icon_path))
         
         # 设置默认最大化
         self.showMaximized()
@@ -172,7 +182,8 @@ class MusicPlayer(QMainWindow):
         self.tray_icon = QSystemTrayIcon(self)
         
         # 设置图标（使用自定义图标）
-        self.tray_icon.setIcon(QIcon("1328x1328.png"))
+        icon_path = self.get_resource_path("1328x1328.png")
+        self.tray_icon.setIcon(QIcon(icon_path))
         
         # 创建托盘菜单
         tray_menu = QMenu()
@@ -483,7 +494,17 @@ def main():
     app.setQuitOnLastWindowClosed(False)  # 关闭最后一个窗口时不退出程序
     
     # 设置应用程序图标（用于任务栏）
-    app.setWindowIcon(QIcon("1328x1328.png"))
+    def get_resource_path(relative_path):
+        """获取资源文件路径，支持PyInstaller打包"""
+        try:
+            # PyInstaller创建临时文件夹，将路径存储在_MEIPASS中
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+    
+    icon_path = get_resource_path("1328x1328.png")
+    app.setWindowIcon(QIcon(icon_path))
     
     player = MusicPlayer()
     player.show()
