@@ -466,10 +466,6 @@ class MusicPlayer(QMainWindow):
     def closeEvent(self, event):
         """关闭事件"""
         if self.tray_icon.isVisible():
-            QMessageBox.information(
-                self, "音乐播放器",
-                "程序将最小化到系统托盘。要完全退出程序，请在托盘图标上右键选择退出。"
-            )
             self.hide()
             event.ignore()
 
