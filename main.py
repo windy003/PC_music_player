@@ -78,6 +78,9 @@ class MusicPlayer(QMainWindow):
         top_layout.addWidget(self.open_folder_btn)
         
         # 播放模式选择
+        mode_label = QLabel("播放模式 (Alt+M/L):")
+        top_layout.addWidget(mode_label)
+        
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["顺序播放", "单曲循环", "随机播放"])
         self.mode_combo.currentIndexChanged.connect(self.change_play_mode)
