@@ -188,7 +188,7 @@ class MusicPlayer(QMainWindow):
         
         tray_menu.addSeparator()
         
-        quit_action = QAction("退出", self)
+        quit_action = QAction("退出 (&X)", self)
         quit_action.triggered.connect(self.quit_application)
         tray_menu.addAction(quit_action)
         
