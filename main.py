@@ -4,7 +4,8 @@ import random
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QSlider, QListWidget, 
                              QFileDialog, QMessageBox, QSystemTrayIcon, QMenu, 
-                             QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut)
+                             QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut,
+                             QLineEdit, QInputDialog)
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
@@ -113,10 +114,34 @@ class MusicPlayer(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
+        # 左侧播放列表区域
+        left_widget = QWidget()
+        left_layout = QVBoxLayout()
+        left_widget.setLayout(left_layout)
+        
+        # 搜索框
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("搜索:"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("输入歌曲名称或艺术家...")
+        self.search_box.textChanged.connect(self.filter_playlist)
+        search_layout.addWidget(self.search_box)
+        
+        # 清除搜索按钮
+        clear_search_btn = QPushButton("清除")
+        clear_search_btn.clicked.connect(self.clear_search)
+        search_layout.addWidget(clear_search_btn)
+        
+        left_layout.addLayout(search_layout)
+        
         # 播放列表
         self.playlist_widget = QListWidget()
         self.playlist_widget.itemDoubleClicked.connect(self.play_selected_song)
-        splitter.addWidget(self.playlist_widget)
+        self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.playlist_widget.customContextMenuRequested.connect(self.show_context_menu)
+        left_layout.addWidget(self.playlist_widget)
+        
+        splitter.addWidget(left_widget)
         
         # 右侧控制区域
         right_widget = QWidget()
@@ -325,7 +350,8 @@ class MusicPlayer(QMainWindow):
             self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
             
             # 添加到UI列表
-            item = QListWidgetItem(f"{song_info['title']} - {song_info['artist']}")
+            display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
+            item = QListWidgetItem(display_text)
             self.playlist_widget.addItem(item)
 
     def get_song_info(self, file_path):
@@ -497,7 +523,9 @@ class MusicPlayer(QMainWindow):
         """播放列表位置改变"""
         if 0 <= position < len(self.song_list):
             song_info = self.song_list[position]
-            self.current_song_label.setText(f"{song_info['title']} - {song_info['artist']}")
+            # 优先显示自定义名称，否则显示原始信息
+            display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
+            self.current_song_label.setText(display_text)
             
             # 高亮当前播放的歌曲
             for i in range(self.playlist_widget.count()):
@@ -537,9 +565,8 @@ class MusicPlayer(QMainWindow):
     def save_playlist(self):
         """保存当前播放列表"""
         if self.song_list:
-            # 保存歌曲路径列表
-            song_paths = [song['path'] for song in self.song_list]
-            self.settings.setValue("playlist", song_paths)
+            # 保存完整的歌曲信息（包括自定义名称）
+            self.settings.setValue("playlist_full", self.song_list)
             
             # 保存当前播放位置
             current_index = self.playlist.currentIndex()
@@ -551,24 +578,36 @@ class MusicPlayer(QMainWindow):
             # 保存音量
             self.settings.setValue("volume", self.volume)
             
-            print(f"已保存播放列表，共{len(song_paths)}首歌曲")
+            print(f"已保存播放列表，共{len(self.song_list)}首歌曲")
 
     def load_last_playlist(self):
         """加载上次的播放列表"""
-        song_paths = self.settings.value("playlist", [])
+        # 尝试加载完整的播放列表信息
+        saved_songs = self.settings.value("playlist_full", [])
         
-        if song_paths and isinstance(song_paths, list):
-            # 过滤存在的文件
-            existing_paths = []
-            for path in song_paths:
-                if os.path.exists(path):
-                    existing_paths.append(path)
-                else:
-                    print(f"文件不存在，跳过: {path}")
+        if saved_songs and isinstance(saved_songs, list):
+            # 过滤存在的文件并恢复信息
+            existing_songs = []
+            for song_info in saved_songs:
+                if isinstance(song_info, dict) and 'path' in song_info:
+                    if os.path.exists(song_info['path']):
+                        existing_songs.append(song_info)
+                    else:
+                        print(f"文件不存在，跳过: {song_info['path']}")
             
-            if existing_paths:
-                # 添加到播放列表
-                self.add_files_to_playlist(existing_paths)
+            if existing_songs:
+                # 直接设置歌曲列表
+                self.song_list = existing_songs
+                
+                # 重建播放列表和UI
+                for song_info in existing_songs:
+                    # 添加到播放列表
+                    self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(song_info['path'])))
+                    
+                    # 添加到UI列表
+                    display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
+                    item = QListWidgetItem(display_text)
+                    self.playlist_widget.addItem(item)
                 
                 # 恢复播放位置
                 current_index = self.settings.value("current_index", 0, type=int)
@@ -585,11 +624,127 @@ class MusicPlayer(QMainWindow):
                 if 0 <= volume <= 100:
                     self.volume_slider.setValue(volume)
                 
-                print(f"已加载上次播放列表，共{len(existing_paths)}首歌曲")
+                print(f"已加载上次播放列表，共{len(existing_songs)}首歌曲")
             else:
                 print("上次播放列表中的文件都不存在")
         else:
-            print("没有找到上次的播放列表")
+            # 尝试加载旧格式的播放列表（仅路径）
+            song_paths = self.settings.value("playlist", [])
+            if song_paths and isinstance(song_paths, list):
+                existing_paths = []
+                for path in song_paths:
+                    if os.path.exists(path):
+                        existing_paths.append(path)
+                    else:
+                        print(f"文件不存在，跳过: {path}")
+                
+                if existing_paths:
+                    self.add_files_to_playlist(existing_paths)
+                    print(f"已加载旧格式播放列表，共{len(existing_paths)}首歌曲")
+                else:
+                    print("上次播放列表中的文件都不存在")
+            else:
+                print("没有找到上次的播放列表")
+
+    def filter_playlist(self):
+        """过滤播放列表"""
+        search_text = self.search_box.text().lower()
+        
+        for i in range(self.playlist_widget.count()):
+            item = self.playlist_widget.item(i)
+            if search_text in item.text().lower():
+                item.setHidden(False)
+            else:
+                item.setHidden(True)
+
+    def clear_search(self):
+        """清除搜索"""
+        self.search_box.clear()
+        # 显示所有项目
+        for i in range(self.playlist_widget.count()):
+            item = self.playlist_widget.item(i)
+            item.setHidden(False)
+
+    def show_context_menu(self, position):
+        """显示右键菜单"""
+        item = self.playlist_widget.itemAt(position)
+        if item is None:
+            return
+        
+        menu = QMenu()
+        
+        # 重命名动作
+        rename_action = QAction("重命名", self)
+        rename_action.triggered.connect(lambda: self.rename_playlist_item(item))
+        menu.addAction(rename_action)
+        
+        # 删除动作
+        delete_action = QAction("从列表中删除", self)
+        delete_action.triggered.connect(lambda: self.delete_playlist_item(item))
+        menu.addAction(delete_action)
+        
+        menu.addSeparator()
+        
+        # 播放动作
+        play_action = QAction("播放", self)
+        play_action.triggered.connect(lambda: self.play_selected_song(item))
+        menu.addAction(play_action)
+        
+        # 显示菜单
+        menu.exec_(self.playlist_widget.mapToGlobal(position))
+
+    def rename_playlist_item(self, item):
+        """重命名播放列表项目"""
+        current_text = item.text()
+        
+        # 获取当前项目的索引
+        item_index = self.playlist_widget.row(item)
+        if item_index < 0 or item_index >= len(self.song_list):
+            return
+        
+        # 显示输入对话框
+        new_name, ok = QInputDialog.getText(
+            self, "重命名", "请输入新的显示名称:", 
+            QLineEdit.Normal, current_text
+        )
+        
+        if ok and new_name.strip():
+            # 更新列表项显示
+            item.setText(new_name.strip())
+            
+            # 更新歌曲信息中的标题
+            song_info = self.song_list[item_index]
+            song_info['display_name'] = new_name.strip()
+            
+            # 如果是当前播放的歌曲，更新显示
+            if self.playlist.currentIndex() == item_index:
+                self.current_song_label.setText(new_name.strip())
+            
+            # 保存播放列表
+            self.save_playlist()
+
+    def delete_playlist_item(self, item):
+        """从播放列表中删除项目"""
+        reply = QMessageBox.question(
+            self, "确认删除", "确定要从播放列表中删除这首歌曲吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            item_index = self.playlist_widget.row(item)
+            if item_index >= 0:
+                # 从UI列表中删除
+                self.playlist_widget.takeItem(item_index)
+                
+                # 从播放列表中删除
+                self.playlist.removeMedia(item_index)
+                
+                # 从歌曲信息列表中删除
+                if item_index < len(self.song_list):
+                    del self.song_list[item_index]
+                
+                # 保存播放列表
+                self.save_playlist()
 
     def quit_application(self):
         """退出应用程序"""
