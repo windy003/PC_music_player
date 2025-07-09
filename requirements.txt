@@ -1,2 +1,3 @@
-PyQt5==5.15.10
-mutagen==1.47.0 
+PyQt5>=5.15.0
+mutagen>=1.45.0
+pywin32>=227 

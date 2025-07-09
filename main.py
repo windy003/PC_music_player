@@ -1,17 +1,95 @@
 import sys
 import os
 import random
+import threading
+import time
+
+# 尝试导入Windows API用于全局快捷键
+try:
+    import win32api
+    import win32con
+    import win32gui
+    GLOBAL_HOTKEY_AVAILABLE = True
+except ImportError:
+    GLOBAL_HOTKEY_AVAILABLE = False
+    print("警告: 无法导入win32api，全局快捷键功能将不可用")
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QSlider, QListWidget, 
                              QFileDialog, QMessageBox, QSystemTrayIcon, QMenu, 
                              QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut,
-                             QLineEdit, QInputDialog)
+                             QLineEdit, QInputDialog, QDialog, QFormLayout, QKeySequenceEdit,
+                             QDialogButtonBox, QGroupBox)
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
 import mutagen
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3NoHeaderError
+
+
+class GlobalHotkeyDialog(QDialog):
+    def __init__(self, current_show_key, current_play_key, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("全局快捷键设置")
+        self.setModal(True)
+        self.resize(400, 200)
+        
+        # 设置图标
+        if parent:
+            self.setWindowIcon(parent.windowIcon())
+        
+        layout = QVBoxLayout()
+        
+        # 说明文字
+        info_label = QLabel("设置全局快捷键（在程序后台运行时也可使用）:")
+        info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+        
+        # 快捷键设置组
+        hotkey_group = QGroupBox("快捷键设置")
+        form_layout = QFormLayout()
+        
+        # 显示窗口快捷键
+        self.show_key_edit = QLineEdit()
+        self.show_key_edit.setText(current_show_key)
+        self.show_key_edit.setPlaceholderText("例如: Ctrl+Alt+M")
+        form_layout.addRow("显示窗口:", self.show_key_edit)
+        
+        # 播放/暂停快捷键
+        self.play_key_edit = QLineEdit()
+        self.play_key_edit.setText(current_play_key)
+        self.play_key_edit.setPlaceholderText("例如: Ctrl+Alt+P")
+        form_layout.addRow("播放/暂停:", self.play_key_edit)
+        
+        hotkey_group.setLayout(form_layout)
+        layout.addWidget(hotkey_group)
+        
+        # 说明文字
+        help_label = QLabel(
+            "支持的修饰键: Ctrl, Alt, Shift, Win\n"
+            "支持的按键: A-Z, 0-9, Space, Enter\n"
+            "格式示例: Ctrl+Alt+M, Shift+F1, Win+Space"
+        )
+        help_label.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(help_label)
+        
+        # 按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        
+        self.setLayout(layout)
+    
+    def accept(self):
+        self.show_key = self.show_key_edit.text().strip()
+        self.play_key = self.play_key_edit.text().strip()
+        
+        if not self.show_key or not self.play_key:
+            QMessageBox.warning(self, "输入错误", "请输入完整的快捷键设置！")
+            return
+        
+        super().accept()
 
 
 class MusicPlayer(QMainWindow):
@@ -56,6 +134,15 @@ class MusicPlayer(QMainWindow):
         # 初始化设置
         self.settings = QSettings("MusicPlayer", "PlaylistMemory")
         
+        # 全局快捷键相关
+        self.global_hotkeys_enabled = False
+        self.hotkey_thread = None
+        self.hotkey_stop_event = threading.Event()
+        
+        # 默认全局快捷键设置
+        self.global_show_key = self.settings.value("global_show_key", "Ctrl+Alt+M", type=str)
+        self.global_play_key = self.settings.value("global_play_key", "Ctrl+Alt+P", type=str)
+        
         # 初始化UI
         self.init_ui()
         
@@ -75,6 +162,10 @@ class MusicPlayer(QMainWindow):
         
         # 加载上次的播放列表
         self.load_last_playlist()
+        
+        # 初始化全局快捷键
+        if GLOBAL_HOTKEY_AVAILABLE:
+            self.init_global_hotkeys()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -106,6 +197,12 @@ class MusicPlayer(QMainWindow):
         self.mode_combo.currentIndexChanged.connect(self.change_play_mode)
         self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)")
         top_layout.addWidget(self.mode_combo)
+        
+        # 全局快捷键设置按钮
+        if GLOBAL_HOTKEY_AVAILABLE:
+            self.global_hotkey_btn = QPushButton("全局快捷键设置")
+            self.global_hotkey_btn.clicked.connect(self.show_global_hotkey_settings)
+            top_layout.addWidget(self.global_hotkey_btn)
         
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
@@ -785,8 +882,119 @@ class MusicPlayer(QMainWindow):
                 # 保存播放列表
                 self.save_playlist()
 
+    def init_global_hotkeys(self):
+        """初始化全局快捷键"""
+        if not GLOBAL_HOTKEY_AVAILABLE:
+            return
+        
+        # 启动全局快捷键监听线程
+        self.start_global_hotkey_listener()
+
+    def start_global_hotkey_listener(self):
+        """启动全局快捷键监听线程"""
+        if self.hotkey_thread and self.hotkey_thread.is_alive():
+            return
+        
+        self.hotkey_stop_event.clear()
+        self.hotkey_thread = threading.Thread(target=self.global_hotkey_listener, daemon=True)
+        self.hotkey_thread.start()
+        self.global_hotkeys_enabled = True
+
+    def stop_global_hotkey_listener(self):
+        """停止全局快捷键监听"""
+        if self.hotkey_thread and self.hotkey_thread.is_alive():
+            self.hotkey_stop_event.set()
+            self.global_hotkeys_enabled = False
+
+    def global_hotkey_listener(self):
+        """全局快捷键监听器"""
+        # 注册热键
+        try:
+            # 将快捷键字符串转换为虚拟键码
+            show_key_code = self.parse_hotkey(self.global_show_key)
+            play_key_code = self.parse_hotkey(self.global_play_key)
+            
+            if show_key_code:
+                win32gui.RegisterHotKey(None, 1, show_key_code[0], show_key_code[1])
+            if play_key_code:
+                win32gui.RegisterHotKey(None, 2, play_key_code[0], play_key_code[1])
+            
+            # 监听消息
+            while not self.hotkey_stop_event.is_set():
+                try:
+                    msg = win32gui.GetMessage(None, 0, 0)
+                    if msg[1][1] == win32con.WM_HOTKEY:
+                        if msg[1][2] == 1:  # 显示窗口热键
+                            self.show_window()
+                        elif msg[1][2] == 2:  # 播放/暂停热键
+                            self.toggle_play()
+                except:
+                    break
+                time.sleep(0.01)
+        except Exception as e:
+            print(f"全局快捷键监听器错误: {e}")
+        finally:
+            # 注销热键
+            try:
+                win32gui.UnregisterHotKey(None, 1)
+                win32gui.UnregisterHotKey(None, 2)
+            except:
+                pass
+
+    def parse_hotkey(self, hotkey_str):
+        """解析快捷键字符串为虚拟键码"""
+        if not hotkey_str:
+            return None
+        
+        modifiers = 0
+        key = 0
+        
+        parts = hotkey_str.split('+')
+        for part in parts:
+            part = part.strip().lower()
+            if part == 'ctrl':
+                modifiers |= win32con.MOD_CONTROL
+            elif part == 'alt':
+                modifiers |= win32con.MOD_ALT
+            elif part == 'shift':
+                modifiers |= win32con.MOD_SHIFT
+            elif part == 'win':
+                modifiers |= win32con.MOD_WIN
+            else:
+                # 普通按键
+                if len(part) == 1:
+                    key = ord(part.upper())
+                elif part == 'space':
+                    key = win32con.VK_SPACE
+                elif part == 'enter':
+                    key = win32con.VK_RETURN
+                # 可以添加更多按键映射
+        
+        return (modifiers, key) if key else None
+
+    def show_global_hotkey_settings(self):
+        """显示全局快捷键设置对话框"""
+        dialog = GlobalHotkeyDialog(self.global_show_key, self.global_play_key, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.global_show_key = dialog.show_key
+            self.global_play_key = dialog.play_key
+            
+            # 保存设置
+            self.settings.setValue("global_show_key", self.global_show_key)
+            self.settings.setValue("global_play_key", self.global_play_key)
+            
+            # 重启全局快捷键监听
+            self.stop_global_hotkey_listener()
+            time.sleep(0.1)  # 等待线程结束
+            self.start_global_hotkey_listener()
+            
+            QMessageBox.information(self, "设置成功", f"全局快捷键已更新:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}")
+
     def quit_application(self):
         """退出应用程序"""
+        # 停止全局快捷键监听
+        self.stop_global_hotkey_listener()
+        
         # 保存当前播放列表
         self.save_playlist()
         self.tray_icon.hide()
