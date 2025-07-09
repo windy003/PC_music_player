@@ -13,13 +13,14 @@ try:
 except ImportError:
     GLOBAL_HOTKEY_AVAILABLE = False
     print("警告: 无法导入win32api，全局快捷键功能将不可用")
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QSlider, QListWidget, 
                              QFileDialog, QMessageBox, QSystemTrayIcon, QMenu, 
                              QAction, QComboBox, QSplitter, QListWidgetItem, QShortcut,
                              QLineEdit, QInputDialog, QDialog, QFormLayout, QKeySequenceEdit,
                              QDialogButtonBox, QGroupBox)
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings
+from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings, QEvent
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
 import mutagen
@@ -27,12 +28,88 @@ from mutagen.mp3 import MP3
 from mutagen.id3 import ID3NoHeaderError
 
 
+# 自定义事件类
+class ShowWindowEvent(QEvent):
+    def __init__(self):
+        super().__init__(QEvent.User + 1)
+
+
+class TogglePlayEvent(QEvent):
+    def __init__(self):
+        super().__init__(QEvent.User + 2)
+
+
+# 自定义按键捕获输入框
+class HotkeyLineEdit(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setPlaceholderText("点击此处并按下快捷键...")
+        self.current_keys = []
+        
+    def keyPressEvent(self, event):
+        # 记录按下的键
+        modifiers = []
+        if event.modifiers() & Qt.ControlModifier:
+            modifiers.append("Ctrl")
+        if event.modifiers() & Qt.AltModifier:
+            modifiers.append("Alt")
+        if event.modifiers() & Qt.ShiftModifier:
+            modifiers.append("Shift")
+        if event.modifiers() & Qt.MetaModifier:
+            modifiers.append("Win")
+            
+        # 获取主键
+        key_text = ""
+        key = event.key()
+        
+        if Qt.Key_A <= key <= Qt.Key_Z:
+            key_text = chr(key)
+        elif Qt.Key_0 <= key <= Qt.Key_9:
+            key_text = chr(key)
+        elif key == Qt.Key_Space:
+            key_text = "Space"
+        elif key == Qt.Key_Return or key == Qt.Key_Enter:
+            key_text = "Enter"
+        elif key == Qt.Key_F1:
+            key_text = "F1"
+        elif key == Qt.Key_F2:
+            key_text = "F2"
+        elif key == Qt.Key_F3:
+            key_text = "F3"
+        elif key == Qt.Key_F4:
+            key_text = "F4"
+        elif key == Qt.Key_F5:
+            key_text = "F5"
+        elif key == Qt.Key_F6:
+            key_text = "F6"
+        elif key == Qt.Key_F7:
+            key_text = "F7"
+        elif key == Qt.Key_F8:
+            key_text = "F8"
+        elif key == Qt.Key_F9:
+            key_text = "F9"
+        elif key == Qt.Key_F10:
+            key_text = "F10"
+        elif key == Qt.Key_F11:
+            key_text = "F11"
+        elif key == Qt.Key_F12:
+            key_text = "F12"
+        
+        # 如果有有效的主键，组合快捷键字符串
+        if key_text and modifiers:
+            hotkey_str = "+".join(modifiers + [key_text])
+            self.setText(hotkey_str)
+        
+        # 不调用父类的keyPressEvent，防止默认处理
+
+
 class GlobalHotkeyDialog(QDialog):
     def __init__(self, current_show_key, current_play_key, parent=None):
         super().__init__(parent)
         self.setWindowTitle("全局快捷键设置")
         self.setModal(True)
-        self.resize(400, 200)
+        self.resize(400, 250)
         
         # 设置图标
         if parent:
@@ -50,15 +127,13 @@ class GlobalHotkeyDialog(QDialog):
         form_layout = QFormLayout()
         
         # 显示窗口快捷键
-        self.show_key_edit = QLineEdit()
+        self.show_key_edit = HotkeyLineEdit()
         self.show_key_edit.setText(current_show_key)
-        self.show_key_edit.setPlaceholderText("例如: Ctrl+Alt+M")
         form_layout.addRow("显示窗口:", self.show_key_edit)
         
         # 播放/暂停快捷键
-        self.play_key_edit = QLineEdit()
+        self.play_key_edit = HotkeyLineEdit()
         self.play_key_edit.setText(current_play_key)
-        self.play_key_edit.setPlaceholderText("例如: Ctrl+Alt+P")
         form_layout.addRow("播放/暂停:", self.play_key_edit)
         
         hotkey_group.setLayout(form_layout)
@@ -66,9 +141,12 @@ class GlobalHotkeyDialog(QDialog):
         
         # 说明文字
         help_label = QLabel(
+            "使用方法:\n"
+            "1. 点击输入框\n"
+            "2. 按下想要设置的快捷键组合\n"
+            "3. 快捷键会自动显示在输入框中\n\n"
             "支持的修饰键: Ctrl, Alt, Shift, Win\n"
-            "支持的按键: A-Z, 0-9, Space, Enter\n"
-            "格式示例: Ctrl+Alt+M, Shift+F1, Win+Space"
+            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter"
         )
         help_label.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(help_label)
@@ -86,7 +164,7 @@ class GlobalHotkeyDialog(QDialog):
         self.play_key = self.play_key_edit.text().strip()
         
         if not self.show_key or not self.play_key:
-            QMessageBox.warning(self, "输入错误", "请输入完整的快捷键设置！")
+            QMessageBox.warning(self, "输入错误", "请设置完整的快捷键！")
             return
         
         super().accept()
@@ -104,7 +182,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-04")
+        self.setWindowTitle("音乐播放器:2025/07/09-05")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -166,6 +244,16 @@ class MusicPlayer(QMainWindow):
         # 初始化全局快捷键
         if GLOBAL_HOTKEY_AVAILABLE:
             self.init_global_hotkeys()
+
+    def event(self, event):
+        """处理自定义事件"""
+        if event.type() == QEvent.User + 1:  # ShowWindowEvent
+            self.show_window()
+            return True
+        elif event.type() == QEvent.User + 2:  # TogglePlayEvent
+            self.toggle_play()
+            return True
+        return super().event(event)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -924,10 +1012,12 @@ class MusicPlayer(QMainWindow):
                 try:
                     msg = win32gui.GetMessage(None, 0, 0)
                     if msg[1][1] == win32con.WM_HOTKEY:
-                        if msg[1][2] == 1:  # 显示窗口热键
-                            self.show_window()
-                        elif msg[1][2] == 2:  # 播放/暂停热键
-                            self.toggle_play()
+                         if msg[1][2] == 1:  # 显示窗口热键
+                             # 使用信号来调用主线程的方法
+                             QApplication.instance().postEvent(self, ShowWindowEvent())
+                         elif msg[1][2] == 2:  # 播放/暂停热键
+                             # 使用信号来调用主线程的方法
+                             QApplication.instance().postEvent(self, TogglePlayEvent())
                 except:
                     break
                 time.sleep(0.01)
@@ -961,14 +1051,37 @@ class MusicPlayer(QMainWindow):
             elif part == 'win':
                 modifiers |= win32con.MOD_WIN
             else:
-                # 普通按键
+                                # 普通按键
                 if len(part) == 1:
                     key = ord(part.upper())
                 elif part == 'space':
                     key = win32con.VK_SPACE
                 elif part == 'enter':
                     key = win32con.VK_RETURN
-                # 可以添加更多按键映射
+                elif part == 'f1':
+                    key = win32con.VK_F1
+                elif part == 'f2':
+                    key = win32con.VK_F2
+                elif part == 'f3':
+                    key = win32con.VK_F3
+                elif part == 'f4':
+                    key = win32con.VK_F4
+                elif part == 'f5':
+                    key = win32con.VK_F5
+                elif part == 'f6':
+                    key = win32con.VK_F6
+                elif part == 'f7':
+                    key = win32con.VK_F7
+                elif part == 'f8':
+                    key = win32con.VK_F8
+                elif part == 'f9':
+                    key = win32con.VK_F9
+                elif part == 'f10':
+                    key = win32con.VK_F10
+                elif part == 'f11':
+                    key = win32con.VK_F11
+                elif part == 'f12':
+                    key = win32con.VK_F12
         
         return (modifiers, key) if key else None
 
