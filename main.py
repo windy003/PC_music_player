@@ -243,7 +243,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/14-03")
+        self.setWindowTitle("音乐播放器:2025/07/14-04")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -618,6 +618,8 @@ class MusicPlayer(QMainWindow):
         )
         
         if file_paths:
+            # 清空旧的播放列表
+            self.clear_playlist()
             self.add_files_to_playlist(file_paths)
             # 保存播放列表
             self.save_playlist()
@@ -636,11 +638,35 @@ class MusicPlayer(QMainWindow):
                         file_paths.append(os.path.join(root, file))
             
             if file_paths:
+                # 清空旧的播放列表
+                self.clear_playlist()
                 self.add_files_to_playlist(file_paths)
                 # 保存播放列表
                 self.save_playlist()
             else:
                 QMessageBox.information(self, "提示", "所选文件夹中没有找到音频文件")
+
+    def clear_playlist(self):
+        """清空播放列表"""
+        # 停止播放
+        self.player.stop()
+        
+        # 清空所有播放列表相关数据
+        self.song_list.clear()
+        self.playlist.clear()
+        self.playlist_widget.clear()
+        self.play_history.clear()
+        
+        # 重置播放状态
+        self.current_position = 0
+        self.duration = 0
+        self.is_playing = False
+        
+        # 更新UI显示
+        self.current_song_label.setText("没有正在播放的歌曲")
+        self.progress_slider.setValue(0)
+        self.time_label.setText("00:00")
+        self.total_time_label.setText("00:00")
 
     def add_files_to_playlist(self, file_paths):
         """添加文件到播放列表"""
