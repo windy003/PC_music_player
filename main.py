@@ -104,6 +104,41 @@ class HotkeyLineEdit(QLineEdit):
         # 不调用父类的keyPressEvent，防止默认处理
 
 
+# 自定义搜索框，支持方向键导航
+class SearchLineEdit(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        
+    def keyPressEvent(self, event):
+        # 如果按下下方向键，聚焦到播放列表
+        if event.key() == Qt.Key_Down:
+            if self.parent_window and hasattr(self.parent_window, 'playlist_widget'):
+                self.parent_window.focus_playlist_from_search()
+            return
+        
+        # 其他按键正常处理
+        super().keyPressEvent(event)
+
+
+# 自定义播放列表，支持回车键播放
+class PlaylistWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        
+    def keyPressEvent(self, event):
+        # 如果按下回车键，播放选中的歌曲
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            current_item = self.currentItem()
+            if current_item and self.parent_window:
+                self.parent_window.play_selected_song(current_item)
+            return
+        
+        # 其他按键正常处理
+        super().keyPressEvent(event)
+
+
 class GlobalHotkeyDialog(QDialog):
     def __init__(self, current_show_key, current_play_key, parent=None):
         super().__init__(parent)
@@ -182,7 +217,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/14-01")
+        self.setWindowTitle("音乐播放器:2025/07/14-02")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -310,7 +345,7 @@ class MusicPlayer(QMainWindow):
         # 搜索框
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("搜索 (Alt+D):"))
-        self.search_box = QLineEdit()
+        self.search_box = SearchLineEdit(self) # Pass self as parent
         self.search_box.setPlaceholderText("输入歌曲名称或艺术家...")
         self.search_box.textChanged.connect(self.filter_playlist)
         search_layout.addWidget(self.search_box)
@@ -323,14 +358,14 @@ class MusicPlayer(QMainWindow):
         left_layout.addLayout(search_layout)
         
         # 播放列表
-        self.playlist_widget = QListWidget()
+        self.playlist_widget = PlaylistWidget(self) # Pass self as parent
         self.playlist_widget.itemDoubleClicked.connect(self.play_selected_song)
         self.playlist_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self.show_context_menu)
         left_layout.addWidget(self.playlist_widget)
         
         # 播放列表快捷键提示
-        playlist_hint_label = QLabel("提示: Ctrl+R(重命名) Delete(删除) 双击播放")
+        playlist_hint_label = QLabel("提示: ↓(从搜索框进入) Enter(播放) Ctrl+R(重命名) Delete(删除) 双击播放")
         playlist_hint_label.setStyleSheet("color: gray; font-size: 10px;")
         playlist_hint_label.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(playlist_hint_label)
@@ -909,6 +944,18 @@ class MusicPlayer(QMainWindow):
         """聚焦搜索框"""
         self.search_box.setFocus()
         self.search_box.selectAll()
+    
+    def focus_playlist_from_search(self):
+        """从搜索框聚焦到播放列表"""
+        self.playlist_widget.setFocus()
+        
+        # 如果没有选中项，选择第一个可见项
+        if not self.playlist_widget.currentItem():
+            for i in range(self.playlist_widget.count()):
+                item = self.playlist_widget.item(i)
+                if not item.isHidden():
+                    self.playlist_widget.setCurrentItem(item)
+                    break
 
     def rename_current_item(self):
         """重命名当前选中的项目"""
