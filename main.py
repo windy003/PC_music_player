@@ -182,7 +182,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/09-07")
+        self.setWindowTitle("音乐播放器:2025/07/14-01")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -309,7 +309,7 @@ class MusicPlayer(QMainWindow):
         
         # 搜索框
         search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("搜索 (Alt+S):"))
+        search_layout.addWidget(QLabel("搜索 (Alt+D):"))
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("输入歌曲名称或艺术家...")
         self.search_box.textChanged.connect(self.filter_playlist)
@@ -494,8 +494,8 @@ class MusicPlayer(QMainWindow):
         self.right_shortcut = QShortcut(QKeySequence("Right"), self)
         self.right_shortcut.activated.connect(self.seek_forward)
         
-        # Alt+S: 聚焦搜索框
-        self.search_shortcut = QShortcut(QKeySequence("Alt+S"), self)
+        # Alt+D: 聚焦搜索框
+        self.search_shortcut = QShortcut(QKeySequence("Alt+D"), self)
         self.search_shortcut.activated.connect(self.focus_search_box)
         
         # Alt+C: 清除搜索
