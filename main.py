@@ -489,7 +489,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/14-04")
+        self.setWindowTitle("音乐播放器:2025/07/14-05")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
