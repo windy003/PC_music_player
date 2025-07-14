@@ -3,6 +3,8 @@ import os
 import random
 import threading
 import time
+import multiprocessing
+import queue
 
 # 尝试导入Windows API用于全局快捷键
 try:
@@ -47,6 +49,250 @@ class PreviousSongEvent(QEvent):
 class NextSongEvent(QEvent):
     def __init__(self):
         super().__init__(QEvent.User + 4)
+
+
+# 全局快捷键进程类
+class GlobalHotkeyProcess:
+    """独立进程的全局快捷键管理器"""
+    
+    def __init__(self):
+        self.process = None
+        self.command_queue = None
+        self.event_queue = None
+        self.is_running = False
+        
+        # 默认快捷键设置
+        self.hotkeys = {
+            'show_window': 'Ctrl+Alt+M',
+            'toggle_play': 'Ctrl+Alt+P',
+            'previous_song': 'Ctrl+Alt+Left',
+            'next_song': 'Ctrl+Alt+Right'
+        }
+    
+    def start(self, hotkeys=None):
+        """启动全局快捷键进程"""
+        if not GLOBAL_HOTKEY_AVAILABLE:
+            print("全局快捷键功能不可用")
+            return False
+        
+        if self.is_running:
+            print("全局快捷键进程已在运行")
+            return True
+        
+        if hotkeys:
+            self.hotkeys.update(hotkeys)
+        
+        try:
+            # 创建进程间通信队列
+            self.command_queue = multiprocessing.Queue()
+            self.event_queue = multiprocessing.Queue()
+            
+            # 启动独立进程
+            self.process = multiprocessing.Process(
+                target=self._hotkey_process_main,
+                args=(self.hotkeys, self.command_queue, self.event_queue),
+                daemon=True
+            )
+            self.process.start()
+            self.is_running = True
+            
+            print("全局快捷键进程已启动")
+            return True
+            
+        except Exception as e:
+            print(f"启动全局快捷键进程失败: {e}")
+            return False
+    
+    def stop(self):
+        """停止全局快捷键进程"""
+        if not self.is_running:
+            return
+        
+        try:
+            # 发送停止命令
+            if self.command_queue:
+                self.command_queue.put(('stop',))
+            
+            # 等待进程结束
+            if self.process and self.process.is_alive():
+                self.process.join(timeout=2.0)
+                if self.process.is_alive():
+                    self.process.terminate()
+                    self.process.join()
+            
+            self.is_running = False
+            print("全局快捷键进程已停止")
+            
+        except Exception as e:
+            print(f"停止全局快捷键进程时出错: {e}")
+    
+    def update_hotkeys(self, hotkeys):
+        """更新快捷键设置"""
+        self.hotkeys.update(hotkeys)
+        if self.is_running and self.command_queue:
+            try:
+                self.command_queue.put(('update_hotkeys', hotkeys))
+            except:
+                pass
+    
+    def get_events(self):
+        """获取快捷键事件"""
+        events = []
+        if self.event_queue:
+            try:
+                while True:
+                    event = self.event_queue.get_nowait()
+                    events.append(event)
+            except:
+                pass
+        return events
+    
+    @staticmethod
+    def _hotkey_process_main(hotkeys, command_queue, event_queue):
+        """全局快捷键进程主函数"""
+        if not GLOBAL_HOTKEY_AVAILABLE:
+            return
+        
+        registered_hotkeys = []
+        running = True
+        
+        def parse_hotkey(hotkey_str):
+            """解析快捷键字符串"""
+            if not hotkey_str:
+                return None
+            
+            modifiers = 0
+            key = 0
+            
+            parts = hotkey_str.split('+')
+            for part in parts:
+                part = part.strip().lower()
+                if part == 'ctrl':
+                    modifiers |= win32con.MOD_CONTROL
+                elif part == 'alt':
+                    modifiers |= win32con.MOD_ALT
+                elif part == 'shift':
+                    modifiers |= win32con.MOD_SHIFT
+                elif part == 'win':
+                    modifiers |= win32con.MOD_WIN
+                else:
+                    # 普通按键
+                    if len(part) == 1:
+                        key = ord(part.upper())
+                    elif part == 'space':
+                        key = win32con.VK_SPACE
+                    elif part == 'enter':
+                        key = win32con.VK_RETURN
+                    elif part == 'left':
+                        key = win32con.VK_LEFT
+                    elif part == 'right':
+                        key = win32con.VK_RIGHT
+                    elif part.startswith('f') and len(part) <= 3:
+                        try:
+                            f_num = int(part[1:])
+                            if 1 <= f_num <= 12:
+                                key = win32con.VK_F1 + f_num - 1
+                        except:
+                            pass
+            
+            return (modifiers, key) if key else None
+        
+        def register_hotkeys():
+            """注册热键"""
+            nonlocal registered_hotkeys
+            
+            # 先注销已注册的热键
+            for hotkey_id in registered_hotkeys:
+                try:
+                    win32gui.UnregisterHotKey(None, hotkey_id)
+                except:
+                    pass
+            registered_hotkeys.clear()
+            
+            # 注册新的热键
+            hotkey_ids = {
+                'show_window': 1,
+                'toggle_play': 2,
+                'previous_song': 3,
+                'next_song': 4
+            }
+            
+            success_count = 0
+            for action, hotkey_str in hotkeys.items():
+                hotkey_id = hotkey_ids.get(action)
+                if hotkey_id:
+                    key_code = parse_hotkey(hotkey_str)
+                    if key_code:
+                        try:
+                            result = win32gui.RegisterHotKey(None, hotkey_id, key_code[0], key_code[1])
+                            if result:
+                                registered_hotkeys.append(hotkey_id)
+                                success_count += 1
+                                print(f"✓ 进程注册热键成功 {action}: {hotkey_str}")
+                            else:
+                                error_code = win32api.GetLastError()
+                                if error_code == 1409:
+                                    print(f"✗ 热键被占用 {action}: {hotkey_str}")
+                                elif error_code == 1419:
+                                    print(f"✗ 权限不足 {action}: {hotkey_str}")
+                                else:
+                                    print(f"✗ 注册失败 {action}: {hotkey_str} (错误: {error_code})")
+                        except Exception as e:
+                            print(f"✗ 注册异常 {action}: {hotkey_str} - {e}")
+            
+            print(f"全局快捷键进程注册完成: {success_count}/{len(hotkeys)} 个成功")
+            return success_count > 0
+        
+        try:
+            # 初始注册热键
+            if not register_hotkeys():
+                print("进程: 所有热键注册失败，可能需要管理员权限")
+            
+            # 主消息循环
+            while running:
+                try:
+                    # 检查命令
+                    try:
+                        cmd = command_queue.get_nowait()
+                        if cmd[0] == 'stop':
+                            running = False
+                            break
+                        elif cmd[0] == 'update_hotkeys':
+                            hotkeys.update(cmd[1])
+                            register_hotkeys()
+                    except:
+                        pass
+                    
+                    # 检查热键消息
+                    msg = win32gui.PeekMessage(None, 0, 0, win32con.PM_REMOVE)
+                    if msg and msg[1][1] == win32con.WM_HOTKEY:
+                        hotkey_id = msg[1][2]
+                        if hotkey_id == 1:
+                            event_queue.put('show_window')
+                        elif hotkey_id == 2:
+                            event_queue.put('toggle_play')
+                        elif hotkey_id == 3:
+                            event_queue.put('previous_song')
+                        elif hotkey_id == 4:
+                            event_queue.put('next_song')
+                    
+                    time.sleep(0.01)
+                    
+                except Exception as e:
+                    print(f"进程消息循环错误: {e}")
+                    break
+        
+        except Exception as e:
+            print(f"全局快捷键进程错误: {e}")
+        
+        finally:
+            # 清理注册的热键
+            for hotkey_id in registered_hotkeys:
+                try:
+                    win32gui.UnregisterHotKey(None, hotkey_id)
+                except:
+                    pass
+            print("全局快捷键进程已清理并退出")
 
 
 # 自定义按键捕获输入框
@@ -280,16 +526,19 @@ class MusicPlayer(QMainWindow):
         # 初始化设置
         self.settings = QSettings("MusicPlayer", "PlaylistMemory")
         
-        # 全局快捷键相关
-        self.global_hotkeys_enabled = False
-        self.hotkey_thread = None
-        self.hotkey_stop_event = threading.Event()
-        
-        # 默认全局快捷键设置
-        self.global_show_key = self.settings.value("global_show_key", "Ctrl+Alt+M", type=str)
-        self.global_play_key = self.settings.value("global_play_key", "Ctrl+Alt+P", type=str)
-        self.global_prev_key = self.settings.value("global_prev_key", "Ctrl+Alt+Left", type=str)
-        self.global_next_key = self.settings.value("global_next_key", "Ctrl+Alt+Right", type=str)
+        # 全局快捷键进程管理器
+        self.global_hotkey_process = None
+        if GLOBAL_HOTKEY_AVAILABLE:
+            self.global_hotkey_process = GlobalHotkeyProcess()
+            
+            # 从设置中加载快捷键
+            hotkeys = {
+                'show_window': self.settings.value("global_show_key", "Ctrl+Alt+M", type=str),
+                'toggle_play': self.settings.value("global_play_key", "Ctrl+Alt+P", type=str),
+                'previous_song': self.settings.value("global_prev_key", "Ctrl+Alt+Left", type=str),
+                'next_song': self.settings.value("global_next_key", "Ctrl+Alt+Right", type=str)
+            }
+            self.global_hotkey_process.hotkeys = hotkeys
         
         # 初始化UI
         self.init_ui()
@@ -311,11 +560,13 @@ class MusicPlayer(QMainWindow):
         # 加载上次的播放列表
         self.load_last_playlist()
         
-        # 初始化全局快捷键
-        if GLOBAL_HOTKEY_AVAILABLE:
-            self.init_global_hotkeys()
-            # 延迟检查快捷键冲突（等待UI完全加载）
-            QTimer.singleShot(1000, self.check_hotkey_conflicts)
+        # 初始化全局快捷键进程
+        if self.global_hotkey_process:
+            self.global_hotkey_process.start()
+            # 启动事件监听定时器
+            self.hotkey_event_timer = QTimer()
+            self.hotkey_event_timer.timeout.connect(self.check_hotkey_events)
+            self.hotkey_event_timer.start(50)  # 每50ms检查一次事件
 
     def event(self, event):
         """处理自定义事件"""
@@ -332,6 +583,22 @@ class MusicPlayer(QMainWindow):
             self.next_song()
             return True
         return super().event(event)
+    
+    def check_hotkey_events(self):
+        """检查全局快捷键事件"""
+        if not self.global_hotkey_process:
+            return
+        
+        events = self.global_hotkey_process.get_events()
+        for event in events:
+            if event == 'show_window':
+                self.show_window()
+            elif event == 'toggle_play':
+                self.toggle_play()
+            elif event == 'previous_song':
+                self.previous_song()
+            elif event == 'next_song':
+                self.next_song()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -1214,240 +1481,92 @@ class MusicPlayer(QMainWindow):
                 # 保存播放列表
                 self.save_playlist()
 
-    def init_global_hotkeys(self):
-        """初始化全局快捷键"""
-        if not GLOBAL_HOTKEY_AVAILABLE:
-            return
-        
-        # 启动全局快捷键监听线程
-        self.start_global_hotkey_listener()
-
-    def start_global_hotkey_listener(self):
-        """启动全局快捷键监听线程"""
-        if self.hotkey_thread and self.hotkey_thread.is_alive():
-            return
-        
-        self.hotkey_stop_event.clear()
-        self.hotkey_thread = threading.Thread(target=self.global_hotkey_listener, daemon=True)
-        self.hotkey_thread.start()
-        self.global_hotkeys_enabled = True
-
-    def stop_global_hotkey_listener(self):
-        """停止全局快捷键监听"""
-        if self.hotkey_thread and self.hotkey_thread.is_alive():
-            self.hotkey_stop_event.set()
-            self.global_hotkeys_enabled = False
-
-    def global_hotkey_listener(self):
-        """全局快捷键监听器"""
-        # 注册热键
-        try:
-            # 将快捷键字符串转换为虚拟键码
-            show_key_code = self.parse_hotkey(self.global_show_key)
-            play_key_code = self.parse_hotkey(self.global_play_key)
-            prev_key_code = self.parse_hotkey(self.global_prev_key)
-            next_key_code = self.parse_hotkey(self.global_next_key)
-            
-            if show_key_code:
-                try:
-                    win32gui.RegisterHotKey(None, 1, show_key_code[0], show_key_code[1])
-                except Exception as e:
-                    print(f"注册显示窗口快捷键失败 {self.global_show_key}: {e}")
-            if play_key_code:
-                try:
-                    win32gui.RegisterHotKey(None, 2, play_key_code[0], play_key_code[1])
-                except Exception as e:
-                    print(f"注册播放快捷键失败 {self.global_play_key}: {e}")
-            if prev_key_code:
-                try:
-                    win32gui.RegisterHotKey(None, 3, prev_key_code[0], prev_key_code[1])
-                except Exception as e:
-                    print(f"上一曲快捷键注册失败 {self.global_prev_key}: {e}")
-            if next_key_code:
-                try:
-                    win32gui.RegisterHotKey(None, 4, next_key_code[0], next_key_code[1])
-                except Exception as e:
-                    print(f"下一曲快捷键注册失败 {self.global_next_key}: {e}")
-            
-            # 监听消息
-            while not self.hotkey_stop_event.is_set():
-                try:
-                    msg = win32gui.GetMessage(None, 0, 0)
-                    if msg[1][1] == win32con.WM_HOTKEY:
-                         if msg[1][2] == 1:  # 显示窗口热键
-                             # 使用信号来调用主线程的方法
-                             QApplication.instance().postEvent(self, ShowWindowEvent())
-                         elif msg[1][2] == 2:  # 播放/暂停热键
-                             # 使用信号来调用主线程的方法
-                             QApplication.instance().postEvent(self, TogglePlayEvent())
-                         elif msg[1][2] == 3:  # 上一曲热键
-                             # 使用信号来调用主线程的方法
-                             QApplication.instance().postEvent(self, PreviousSongEvent())
-                         elif msg[1][2] == 4:  # 下一曲热键
-                             # 使用信号来调用主线程的方法
-                             QApplication.instance().postEvent(self, NextSongEvent())
-                except:
-                    break
-                time.sleep(0.01)
-        except Exception as e:
-            print(f"全局快捷键监听器错误: {e}")
-        finally:
-            # 注销热键
-            try:
-                win32gui.UnregisterHotKey(None, 1)
-                win32gui.UnregisterHotKey(None, 2)
-                win32gui.UnregisterHotKey(None, 3)
-                win32gui.UnregisterHotKey(None, 4)
-            except:
-                pass
-
-    def parse_hotkey(self, hotkey_str):
-        """解析快捷键字符串为虚拟键码"""
-        if not hotkey_str:
-            return None
-        
-        modifiers = 0
-        key = 0
-        
-        parts = hotkey_str.split('+')
-        for part in parts:
-            part = part.strip().lower()
-            if part == 'ctrl':
-                modifiers |= win32con.MOD_CONTROL
-            elif part == 'alt':
-                modifiers |= win32con.MOD_ALT
-            elif part == 'shift':
-                modifiers |= win32con.MOD_SHIFT
-            elif part == 'win':
-                modifiers |= win32con.MOD_WIN
-            else:
-                                # 普通按键
-                if len(part) == 1:
-                    key = ord(part.upper())
-                elif part == 'space':
-                    key = win32con.VK_SPACE
-                elif part == 'enter':
-                    key = win32con.VK_RETURN
-                elif part == 'left':
-                    key = win32con.VK_LEFT
-                elif part == 'right':
-                    key = win32con.VK_RIGHT
-                elif part == 'f1':
-                    key = win32con.VK_F1
-                elif part == 'f2':
-                    key = win32con.VK_F2
-                elif part == 'f3':
-                    key = win32con.VK_F3
-                elif part == 'f4':
-                    key = win32con.VK_F4
-                elif part == 'f5':
-                    key = win32con.VK_F5
-                elif part == 'f6':
-                    key = win32con.VK_F6
-                elif part == 'f7':
-                    key = win32con.VK_F7
-                elif part == 'f8':
-                    key = win32con.VK_F8
-                elif part == 'f9':
-                    key = win32con.VK_F9
-                elif part == 'f10':
-                    key = win32con.VK_F10
-                elif part == 'f11':
-                    key = win32con.VK_F11
-                elif part == 'f12':
-                    key = win32con.VK_F12
-        
-        return (modifiers, key) if key else None
+    
 
     def show_global_hotkey_settings(self):
         """显示全局快捷键设置对话框"""
-        dialog = GlobalHotkeyDialog(self.global_show_key, self.global_play_key, 
-                                   self.global_prev_key, self.global_next_key, self)
+        if not self.global_hotkey_process:
+            QMessageBox.warning(self, "错误", "全局快捷键功能不可用")
+            return
+        
+        current_hotkeys = self.global_hotkey_process.hotkeys
+        dialog = GlobalHotkeyDialog(
+            current_hotkeys['show_window'], 
+            current_hotkeys['toggle_play'], 
+            current_hotkeys['previous_song'], 
+            current_hotkeys['next_song'], 
+            self
+        )
+        
         if dialog.exec_() == QDialog.Accepted:
-            self.global_show_key = dialog.show_key
-            self.global_play_key = dialog.play_key
-            self.global_prev_key = dialog.prev_key
-            self.global_next_key = dialog.next_key
+            new_hotkeys = {
+                'show_window': dialog.show_key,
+                'toggle_play': dialog.play_key,
+                'previous_song': dialog.prev_key,
+                'next_song': dialog.next_key
+            }
+            
+            # 更新进程中的快捷键
+            self.global_hotkey_process.update_hotkeys(new_hotkeys)
             
             # 保存设置
-            self.settings.setValue("global_show_key", self.global_show_key)
-            self.settings.setValue("global_play_key", self.global_play_key)
-            self.settings.setValue("global_prev_key", self.global_prev_key)
-            self.settings.setValue("global_next_key", self.global_next_key)
+            self.settings.setValue("global_show_key", new_hotkeys['show_window'])
+            self.settings.setValue("global_play_key", new_hotkeys['toggle_play'])
+            self.settings.setValue("global_prev_key", new_hotkeys['previous_song'])
+            self.settings.setValue("global_next_key", new_hotkeys['next_song'])
             
-            # 重启全局快捷键监听
-            self.stop_global_hotkey_listener()
-            time.sleep(0.1)  # 等待线程结束
-            self.start_global_hotkey_listener()
-            
-            QMessageBox.information(self, "设置成功", f"全局快捷键已更新:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}\n上一曲: {self.global_prev_key}\n下一曲: {self.global_next_key}")
+            QMessageBox.information(self, "设置成功", 
+                f"全局快捷键已更新:\n"
+                f"显示窗口: {new_hotkeys['show_window']}\n"
+                f"播放/暂停: {new_hotkeys['toggle_play']}\n"
+                f"上一曲: {new_hotkeys['previous_song']}\n"
+                f"下一曲: {new_hotkeys['next_song']}")
     
     def reset_global_hotkeys(self):
         """重置全局快捷键为默认设置"""
+        if not self.global_hotkey_process:
+            QMessageBox.warning(self, "错误", "全局快捷键功能不可用")
+            return
+        
         # 默认的快捷键组合
-        recommended_keys = {
-            "global_show_key": "Ctrl+Alt+M",
-            "global_play_key": "Ctrl+Alt+P", 
-            "global_prev_key": "Ctrl+Alt+Left",
-            "global_next_key": "Ctrl+Alt+Right"
+        default_hotkeys = {
+            'show_window': "Ctrl+Alt+M",
+            'toggle_play': "Ctrl+Alt+P", 
+            'previous_song': "Ctrl+Alt+Left",
+            'next_song': "Ctrl+Alt+Right"
         }
         
-        # 更新设置
-        for key, value in recommended_keys.items():
-            self.settings.setValue(key, value)
+        # 更新进程中的快捷键
+        self.global_hotkey_process.update_hotkeys(default_hotkeys)
         
-        # 重新加载设置
-        self.global_show_key = recommended_keys["global_show_key"]
-        self.global_play_key = recommended_keys["global_play_key"]
-        self.global_prev_key = recommended_keys["global_prev_key"]
-        self.global_next_key = recommended_keys["global_next_key"]
+        # 保存设置
+        self.settings.setValue("global_show_key", default_hotkeys['show_window'])
+        self.settings.setValue("global_play_key", default_hotkeys['toggle_play'])
+        self.settings.setValue("global_prev_key", default_hotkeys['previous_song'])
+        self.settings.setValue("global_next_key", default_hotkeys['next_song'])
         
-        # 重启全局快捷键监听
-        self.stop_global_hotkey_listener()
-        time.sleep(0.1)
-        self.start_global_hotkey_listener()
-        
-        QMessageBox.information(self, "重置成功", f"全局快捷键已重置为推荐设置:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}\n上一曲: {self.global_prev_key}\n下一曲: {self.global_next_key}\n\n推荐设置避免了与系统快捷键的冲突。")
+        QMessageBox.information(self, "重置成功", 
+            f"全局快捷键已重置为推荐设置:\n"
+            f"显示窗口: {default_hotkeys['show_window']}\n"
+            f"播放/暂停: {default_hotkeys['toggle_play']}\n"
+            f"上一曲: {default_hotkeys['previous_song']}\n"
+            f"下一曲: {default_hotkeys['next_song']}\n\n"
+            f"推荐设置避免了与系统快捷键的冲突。")
     
     def check_hotkey_conflicts(self):
         """检查快捷键冲突并提供解决方案"""
-        if not GLOBAL_HOTKEY_AVAILABLE:
-            return
-        
-        # 检查当前设置的快捷键是否可用
-        failed_keys = []
-        
-        test_keys = [
-            ("上一曲", self.global_prev_key),
-            ("下一曲", self.global_next_key)
-        ]
-        
-        for name, hotkey in test_keys:
-            key_code = self.parse_hotkey(hotkey)
-            if key_code:
-                try:
-                    result = win32gui.RegisterHotKey(None, 999, key_code[0], key_code[1])
-                    if result:
-                        win32gui.UnregisterHotKey(None, 999)
-                    else:
-                        failed_keys.append((name, hotkey))
-                except:
-                    failed_keys.append((name, hotkey))
-        
-        if failed_keys:
-            failed_list = "\n".join([f"- {name}: {key}" for name, key in failed_keys])
-            msg = f"以下全局快捷键被占用，无法注册:\n{failed_list}\n\n解决方案:\n1. 点击'重置快捷键'按钮使用推荐设置\n2. 或点击'全局快捷键设置'手动配置其他组合\n\n注意: 本地快捷键(Alt+Left/Right)仍然正常工作。"
-            
-            reply = QMessageBox.question(self, "快捷键冲突", msg, 
-                                       QMessageBox.Yes | QMessageBox.No, 
-                                       QMessageBox.Yes)
-            if reply == QMessageBox.Yes:
-                self.reset_global_hotkeys()
+        # 此方法现在由独立进程处理，主窗口不需要特别处理
+        pass
 
     def quit_application(self):
         """退出应用程序"""
-        # 停止全局快捷键监听
-        self.stop_global_hotkey_listener()
+        # 停止全局快捷键进程
+        if self.global_hotkey_process:
+            self.global_hotkey_process.stop()
+        
+        # 停止事件监听定时器
+        if hasattr(self, 'hotkey_event_timer'):
+            self.hotkey_event_timer.stop()
         
         # 保存当前播放列表
         self.save_playlist()
@@ -1456,6 +1575,10 @@ class MusicPlayer(QMainWindow):
 
 
 def main():
+    # Windows multiprocessing 支持
+    if __name__ == '__main__':
+        multiprocessing.freeze_support()
+        
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 关闭最后一个窗口时不退出程序
     
