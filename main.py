@@ -350,6 +350,12 @@ class MusicPlayer(QMainWindow):
         self.search_box.textChanged.connect(self.filter_playlist)
         search_layout.addWidget(self.search_box)
         
+        # 定位按钮
+        locate_btn = QPushButton("定位 (Alt+G)")
+        locate_btn.clicked.connect(self.locate_current_song)
+        locate_btn.setToolTip("定位到正在播放的歌曲")
+        search_layout.addWidget(locate_btn)
+        
         # 清除搜索按钮
         clear_search_btn = QPushButton("清除 (Alt+C)")
         clear_search_btn.clicked.connect(self.clear_search)
@@ -365,7 +371,7 @@ class MusicPlayer(QMainWindow):
         left_layout.addWidget(self.playlist_widget)
         
         # 播放列表快捷键提示
-        playlist_hint_label = QLabel("提示: ↓(从搜索框进入) Enter(播放) Ctrl+R(重命名) Delete(删除) 双击播放")
+        playlist_hint_label = QLabel("提示: ↓(从搜索框进入) Enter(播放) Alt+G(定位正在播放) Ctrl+R(重命名) Delete(删除) 双击播放")
         playlist_hint_label.setStyleSheet("color: gray; font-size: 10px;")
         playlist_hint_label.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(playlist_hint_label)
@@ -536,6 +542,10 @@ class MusicPlayer(QMainWindow):
         # Alt+C: 清除搜索
         self.clear_search_shortcut = QShortcut(QKeySequence("Alt+C"), self)
         self.clear_search_shortcut.activated.connect(self.clear_search)
+        
+        # Alt+G: 定位到正在播放的歌曲
+        self.locate_shortcut = QShortcut(QKeySequence("Alt+G"), self)
+        self.locate_shortcut.activated.connect(self.locate_current_song)
         
         # Ctrl+R: 重命名选中项
         self.rename_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
@@ -956,6 +966,25 @@ class MusicPlayer(QMainWindow):
                 if not item.isHidden():
                     self.playlist_widget.setCurrentItem(item)
                     break
+    
+    def locate_current_song(self):
+        """定位到正在播放的歌曲"""
+        # 获取当前播放的歌曲索引
+        current_index = self.playlist.currentIndex()
+        
+        if current_index >= 0 and current_index < self.playlist_widget.count():
+            # 清除搜索框，显示所有歌曲
+            self.clear_search()
+            
+            # 选中并滚动到当前播放的歌曲
+            current_item = self.playlist_widget.item(current_index)
+            if current_item:
+                self.playlist_widget.setCurrentItem(current_item)
+                self.playlist_widget.scrollToItem(current_item, QListWidget.PositionAtCenter)
+                self.playlist_widget.setFocus()
+        else:
+            # 如果没有正在播放的歌曲，显示提示
+            QMessageBox.information(self, "提示", "当前没有正在播放的歌曲")
 
     def rename_current_item(self):
         """重命名当前选中的项目"""
