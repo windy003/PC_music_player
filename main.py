@@ -39,6 +39,16 @@ class TogglePlayEvent(QEvent):
         super().__init__(QEvent.User + 2)
 
 
+class PreviousSongEvent(QEvent):
+    def __init__(self):
+        super().__init__(QEvent.User + 3)
+
+
+class NextSongEvent(QEvent):
+    def __init__(self):
+        super().__init__(QEvent.User + 4)
+
+
 # 自定义按键捕获输入框
 class HotkeyLineEdit(QLineEdit):
     def __init__(self, parent=None):
@@ -71,6 +81,10 @@ class HotkeyLineEdit(QLineEdit):
             key_text = "Space"
         elif key == Qt.Key_Return or key == Qt.Key_Enter:
             key_text = "Enter"
+        elif key == Qt.Key_Left:
+            key_text = "Left"
+        elif key == Qt.Key_Right:
+            key_text = "Right"
         elif key == Qt.Key_F1:
             key_text = "F1"
         elif key == Qt.Key_F2:
@@ -140,11 +154,11 @@ class PlaylistWidget(QListWidget):
 
 
 class GlobalHotkeyDialog(QDialog):
-    def __init__(self, current_show_key, current_play_key, parent=None):
+    def __init__(self, current_show_key, current_play_key, current_prev_key, current_next_key, parent=None):
         super().__init__(parent)
         self.setWindowTitle("全局快捷键设置")
         self.setModal(True)
-        self.resize(400, 250)
+        self.resize(400, 350)
         
         # 设置图标
         if parent:
@@ -171,6 +185,16 @@ class GlobalHotkeyDialog(QDialog):
         self.play_key_edit.setText(current_play_key)
         form_layout.addRow("播放/暂停:", self.play_key_edit)
         
+        # 上一曲快捷键
+        self.prev_key_edit = HotkeyLineEdit()
+        self.prev_key_edit.setText(current_prev_key)
+        form_layout.addRow("上一曲:", self.prev_key_edit)
+        
+        # 下一曲快捷键
+        self.next_key_edit = HotkeyLineEdit()
+        self.next_key_edit.setText(current_next_key)
+        form_layout.addRow("下一曲:", self.next_key_edit)
+        
         hotkey_group.setLayout(form_layout)
         layout.addWidget(hotkey_group)
         
@@ -181,7 +205,7 @@ class GlobalHotkeyDialog(QDialog):
             "2. 按下想要设置的快捷键组合\n"
             "3. 快捷键会自动显示在输入框中\n\n"
             "支持的修饰键: Ctrl, Alt, Shift, Win\n"
-            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter"
+            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter, Left, Right"
         )
         help_label.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(help_label)
@@ -197,8 +221,10 @@ class GlobalHotkeyDialog(QDialog):
     def accept(self):
         self.show_key = self.show_key_edit.text().strip()
         self.play_key = self.play_key_edit.text().strip()
+        self.prev_key = self.prev_key_edit.text().strip()
+        self.next_key = self.next_key_edit.text().strip()
         
-        if not self.show_key or not self.play_key:
+        if not self.show_key or not self.play_key or not self.prev_key or not self.next_key:
             QMessageBox.warning(self, "输入错误", "请设置完整的快捷键！")
             return
         
@@ -247,6 +273,10 @@ class MusicPlayer(QMainWindow):
         # 歌曲信息列表
         self.song_list = []
         
+        # 播放历史记录（用于上一曲功能）
+        self.play_history = []
+        self.history_index = -1
+        
         # 初始化设置
         self.settings = QSettings("MusicPlayer", "PlaylistMemory")
         
@@ -258,6 +288,8 @@ class MusicPlayer(QMainWindow):
         # 默认全局快捷键设置
         self.global_show_key = self.settings.value("global_show_key", "Ctrl+Alt+M", type=str)
         self.global_play_key = self.settings.value("global_play_key", "Ctrl+Alt+P", type=str)
+        self.global_prev_key = self.settings.value("global_prev_key", "Ctrl+Alt+Left", type=str)
+        self.global_next_key = self.settings.value("global_next_key", "Ctrl+Alt+Right", type=str)
         
         # 初始化UI
         self.init_ui()
@@ -282,6 +314,8 @@ class MusicPlayer(QMainWindow):
         # 初始化全局快捷键
         if GLOBAL_HOTKEY_AVAILABLE:
             self.init_global_hotkeys()
+            # 延迟检查快捷键冲突（等待UI完全加载）
+            QTimer.singleShot(1000, self.check_hotkey_conflicts)
 
     def event(self, event):
         """处理自定义事件"""
@@ -290,6 +324,12 @@ class MusicPlayer(QMainWindow):
             return True
         elif event.type() == QEvent.User + 2:  # TogglePlayEvent
             self.toggle_play()
+            return True
+        elif event.type() == QEvent.User + 3:  # PreviousSongEvent
+            self.previous_song()
+            return True
+        elif event.type() == QEvent.User + 4:  # NextSongEvent
+            self.next_song()
             return True
         return super().event(event)
 
@@ -329,6 +369,12 @@ class MusicPlayer(QMainWindow):
             self.global_hotkey_btn = QPushButton("全局快捷键设置")
             self.global_hotkey_btn.clicked.connect(self.show_global_hotkey_settings)
             top_layout.addWidget(self.global_hotkey_btn)
+            
+            # 重置全局快捷键按钮
+            self.reset_hotkey_btn = QPushButton("重置快捷键")
+            self.reset_hotkey_btn.clicked.connect(self.reset_global_hotkeys)
+            self.reset_hotkey_btn.setToolTip("重置全局快捷键为默认设置\n默认设置: Ctrl+Alt+M/P/Left/Right")
+            top_layout.addWidget(self.reset_hotkey_btn)
         
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
@@ -422,6 +468,7 @@ class MusicPlayer(QMainWindow):
         
         self.next_btn = QPushButton("下一曲 (Alt+→)")
         self.next_btn.clicked.connect(self.next_song)
+        self.next_btn.setToolTip("下一曲 (Alt+→)\n智能单曲循环模式: Alt+→ 随机下一曲")
         control_layout.addWidget(self.next_btn)
         
         right_layout.addLayout(control_layout)
@@ -503,9 +550,9 @@ class MusicPlayer(QMainWindow):
         self.prev_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
         self.prev_shortcut.activated.connect(self.previous_song)
         
-        # Alt+Right: 下一曲
+        # Alt+Right: 智能下一曲（统一处理）
         self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
-        self.next_shortcut.activated.connect(self.next_song)
+        self.next_shortcut.activated.connect(self.smart_next_shortcut)
         
         # Alt+M: 切换播放模式
         self.mode_shortcut = QShortcut(QKeySequence("Alt+M"), self)
@@ -656,6 +703,8 @@ class MusicPlayer(QMainWindow):
         self.player.play()
         # 重置手动跳转标记
         self.user_manual_skip = False
+        # 记录到播放历史
+        self.add_to_history(index)
 
     def toggle_play(self):
         """切换播放/暂停"""
@@ -665,30 +714,46 @@ class MusicPlayer(QMainWindow):
             self.player.play()
 
     def previous_song(self):
-        """上一曲"""
-        if self.play_mode == 2:  # 随机播放
-            self.play_random_song()
-        elif self.play_mode == 1:  # 单曲循环模式下的智能跳转
-            self.user_manual_skip = True
-            self.play_random_song()
+        """上一曲 - 从历史记录中获取上一曲"""
+        # 尝试从历史记录获取上一曲
+        prev_index = self.get_previous_from_history()
+        if prev_index is not None:
+            self.playlist.setCurrentIndex(prev_index)
+            self.player.play()
         else:
-            self.playlist.previous()
+            # 如果没有历史记录，随机播放一首歌
+            if self.playlist.mediaCount() > 0:
+                current_index = self.playlist.currentIndex()
+                random_index = random.randint(0, self.playlist.mediaCount() - 1)
+                # 避免选择相同的歌曲
+                while random_index == current_index and self.playlist.mediaCount() > 1:
+                    random_index = random.randint(0, self.playlist.mediaCount() - 1)
+                self.playlist.setCurrentIndex(random_index)
+                self.player.play()
 
     def next_song(self):
-        """下一曲"""
-        if self.play_mode == 2:  # 随机播放
-            self.play_random_song()
-        elif self.play_mode == 1:  # 单曲循环模式下的智能跳转
-            self.user_manual_skip = True
-            self.play_random_song()
-        else:
-            self.playlist.next()
+        """下一曲 - 随机播放下一曲"""
+        if self.playlist.mediaCount() > 0:
+            # 记录当前播放的歌曲到历史记录
+            current_index = self.playlist.currentIndex()
+            if current_index >= 0:
+                self.add_to_history(current_index)
+            
+            # 随机选择下一曲
+            random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            # 避免选择相同的歌曲（如果列表中有多首歌）
+            while random_index == current_index and self.playlist.mediaCount() > 1:
+                random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            
+            self.playlist.setCurrentIndex(random_index)
+            self.player.play()
 
     def play_random_song(self):
         """播放随机歌曲"""
         if self.playlist.mediaCount() > 0:
             random_index = random.randint(0, self.playlist.mediaCount() - 1)
             self.playlist.setCurrentIndex(random_index)
+            self.add_to_history(random_index)
 
     def change_play_mode(self, index):
         """改变播放模式"""
@@ -749,6 +814,15 @@ class MusicPlayer(QMainWindow):
         duration = self.player.duration()
         new_position = min(duration, current_position + 5000)  # 5秒 = 5000毫秒
         self.player.setPosition(new_position)
+    
+    def smart_next_shortcut(self):
+        """Alt+右方向键: 智能单曲循环模式下的随机下一曲"""
+        if self.play_mode == 1:  # 智能单曲循环模式
+            self.user_manual_skip = True
+            self.smart_next_song()
+        else:
+            # 其他模式下执行普通的下一曲
+            self.next_song()
 
     def slider_pressed(self):
         """进度条被按下"""
@@ -804,6 +878,10 @@ class MusicPlayer(QMainWindow):
             
             # 保存当前播放位置
             self.settings.setValue("current_index", position)
+            
+            # 记录到播放历史（仅在不是手动跳转时）
+            if not self.user_manual_skip:
+                self.add_to_history(position)
 
     def media_status_changed(self, status):
         """媒体状态改变处理"""
@@ -985,6 +1063,37 @@ class MusicPlayer(QMainWindow):
         else:
             # 如果没有正在播放的歌曲，显示提示
             QMessageBox.information(self, "提示", "当前没有正在播放的歌曲")
+    
+    def add_to_history(self, index):
+        """记录上一曲 - 只保存最后一首歌曲"""
+        # 只保存当前歌曲作为"上一曲"
+        self.play_history = [index]
+        self.history_index = 0
+    
+    def get_previous_from_history(self):
+        """获取上一曲"""
+        if len(self.play_history) > 0:
+            # 返回保存的上一曲，并清空历史记录避免重复返回
+            prev_index = self.play_history[0]
+            self.play_history = []
+            self.history_index = -1
+            return prev_index
+        return None
+    
+    def smart_next_song(self):
+        """智能下一曲 - 在智能单曲循环模式下使用"""
+        if self.playlist.mediaCount() > 0:
+            current_index = self.playlist.currentIndex()
+            # 将当前播放的歌曲加入历史记录
+            if current_index >= 0:
+                self.add_to_history(current_index)
+            
+            random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            # 避免选择相同的歌曲
+            while random_index == current_index and self.playlist.mediaCount() > 1:
+                random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            self.playlist.setCurrentIndex(random_index)
+            self.player.play()
 
     def rename_current_item(self):
         """重命名当前选中的项目"""
@@ -1110,11 +1219,29 @@ class MusicPlayer(QMainWindow):
             # 将快捷键字符串转换为虚拟键码
             show_key_code = self.parse_hotkey(self.global_show_key)
             play_key_code = self.parse_hotkey(self.global_play_key)
+            prev_key_code = self.parse_hotkey(self.global_prev_key)
+            next_key_code = self.parse_hotkey(self.global_next_key)
             
             if show_key_code:
-                win32gui.RegisterHotKey(None, 1, show_key_code[0], show_key_code[1])
+                try:
+                    win32gui.RegisterHotKey(None, 1, show_key_code[0], show_key_code[1])
+                except Exception as e:
+                    print(f"注册显示窗口快捷键失败 {self.global_show_key}: {e}")
             if play_key_code:
-                win32gui.RegisterHotKey(None, 2, play_key_code[0], play_key_code[1])
+                try:
+                    win32gui.RegisterHotKey(None, 2, play_key_code[0], play_key_code[1])
+                except Exception as e:
+                    print(f"注册播放快捷键失败 {self.global_play_key}: {e}")
+            if prev_key_code:
+                try:
+                    win32gui.RegisterHotKey(None, 3, prev_key_code[0], prev_key_code[1])
+                except Exception as e:
+                    print(f"上一曲快捷键注册失败 {self.global_prev_key}: {e}")
+            if next_key_code:
+                try:
+                    win32gui.RegisterHotKey(None, 4, next_key_code[0], next_key_code[1])
+                except Exception as e:
+                    print(f"下一曲快捷键注册失败 {self.global_next_key}: {e}")
             
             # 监听消息
             while not self.hotkey_stop_event.is_set():
@@ -1127,6 +1254,12 @@ class MusicPlayer(QMainWindow):
                          elif msg[1][2] == 2:  # 播放/暂停热键
                              # 使用信号来调用主线程的方法
                              QApplication.instance().postEvent(self, TogglePlayEvent())
+                         elif msg[1][2] == 3:  # 上一曲热键
+                             # 使用信号来调用主线程的方法
+                             QApplication.instance().postEvent(self, PreviousSongEvent())
+                         elif msg[1][2] == 4:  # 下一曲热键
+                             # 使用信号来调用主线程的方法
+                             QApplication.instance().postEvent(self, NextSongEvent())
                 except:
                     break
                 time.sleep(0.01)
@@ -1137,6 +1270,8 @@ class MusicPlayer(QMainWindow):
             try:
                 win32gui.UnregisterHotKey(None, 1)
                 win32gui.UnregisterHotKey(None, 2)
+                win32gui.UnregisterHotKey(None, 3)
+                win32gui.UnregisterHotKey(None, 4)
             except:
                 pass
 
@@ -1167,6 +1302,10 @@ class MusicPlayer(QMainWindow):
                     key = win32con.VK_SPACE
                 elif part == 'enter':
                     key = win32con.VK_RETURN
+                elif part == 'left':
+                    key = win32con.VK_LEFT
+                elif part == 'right':
+                    key = win32con.VK_RIGHT
                 elif part == 'f1':
                     key = win32con.VK_F1
                 elif part == 'f2':
@@ -1196,21 +1335,88 @@ class MusicPlayer(QMainWindow):
 
     def show_global_hotkey_settings(self):
         """显示全局快捷键设置对话框"""
-        dialog = GlobalHotkeyDialog(self.global_show_key, self.global_play_key, self)
+        dialog = GlobalHotkeyDialog(self.global_show_key, self.global_play_key, 
+                                   self.global_prev_key, self.global_next_key, self)
         if dialog.exec_() == QDialog.Accepted:
             self.global_show_key = dialog.show_key
             self.global_play_key = dialog.play_key
+            self.global_prev_key = dialog.prev_key
+            self.global_next_key = dialog.next_key
             
             # 保存设置
             self.settings.setValue("global_show_key", self.global_show_key)
             self.settings.setValue("global_play_key", self.global_play_key)
+            self.settings.setValue("global_prev_key", self.global_prev_key)
+            self.settings.setValue("global_next_key", self.global_next_key)
             
             # 重启全局快捷键监听
             self.stop_global_hotkey_listener()
             time.sleep(0.1)  # 等待线程结束
             self.start_global_hotkey_listener()
             
-            QMessageBox.information(self, "设置成功", f"全局快捷键已更新:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}")
+            QMessageBox.information(self, "设置成功", f"全局快捷键已更新:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}\n上一曲: {self.global_prev_key}\n下一曲: {self.global_next_key}")
+    
+    def reset_global_hotkeys(self):
+        """重置全局快捷键为默认设置"""
+        # 默认的快捷键组合
+        recommended_keys = {
+            "global_show_key": "Ctrl+Alt+M",
+            "global_play_key": "Ctrl+Alt+P", 
+            "global_prev_key": "Ctrl+Alt+Left",
+            "global_next_key": "Ctrl+Alt+Right"
+        }
+        
+        # 更新设置
+        for key, value in recommended_keys.items():
+            self.settings.setValue(key, value)
+        
+        # 重新加载设置
+        self.global_show_key = recommended_keys["global_show_key"]
+        self.global_play_key = recommended_keys["global_play_key"]
+        self.global_prev_key = recommended_keys["global_prev_key"]
+        self.global_next_key = recommended_keys["global_next_key"]
+        
+        # 重启全局快捷键监听
+        self.stop_global_hotkey_listener()
+        time.sleep(0.1)
+        self.start_global_hotkey_listener()
+        
+        QMessageBox.information(self, "重置成功", f"全局快捷键已重置为推荐设置:\n显示窗口: {self.global_show_key}\n播放/暂停: {self.global_play_key}\n上一曲: {self.global_prev_key}\n下一曲: {self.global_next_key}\n\n推荐设置避免了与系统快捷键的冲突。")
+    
+    def check_hotkey_conflicts(self):
+        """检查快捷键冲突并提供解决方案"""
+        if not GLOBAL_HOTKEY_AVAILABLE:
+            return
+        
+        # 检查当前设置的快捷键是否可用
+        failed_keys = []
+        
+        test_keys = [
+            ("上一曲", self.global_prev_key),
+            ("下一曲", self.global_next_key)
+        ]
+        
+        for name, hotkey in test_keys:
+            key_code = self.parse_hotkey(hotkey)
+            if key_code:
+                try:
+                    result = win32gui.RegisterHotKey(None, 999, key_code[0], key_code[1])
+                    if result:
+                        win32gui.UnregisterHotKey(None, 999)
+                    else:
+                        failed_keys.append((name, hotkey))
+                except:
+                    failed_keys.append((name, hotkey))
+        
+        if failed_keys:
+            failed_list = "\n".join([f"- {name}: {key}" for name, key in failed_keys])
+            msg = f"以下全局快捷键被占用，无法注册:\n{failed_list}\n\n解决方案:\n1. 点击'重置快捷键'按钮使用推荐设置\n2. 或点击'全局快捷键设置'手动配置其他组合\n\n注意: 本地快捷键(Alt+Left/Right)仍然正常工作。"
+            
+            reply = QMessageBox.question(self, "快捷键冲突", msg, 
+                                       QMessageBox.Yes | QMessageBox.No, 
+                                       QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                self.reset_global_hotkeys()
 
     def quit_application(self):
         """退出应用程序"""
