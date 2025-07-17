@@ -489,7 +489,7 @@ class MusicPlayer(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音乐播放器:2025/07/14-05")
+        self.setWindowTitle("音乐播放器:2025/07/17-01")
         self.setGeometry(100, 100, 800, 600)
         
         # 设置应用图标
@@ -503,6 +503,9 @@ class MusicPlayer(QMainWindow):
         self.player = QMediaPlayer()
         self.playlist = QMediaPlaylist()
         self.player.setPlaylist(self.playlist)
+        
+        # 设置音频输出的通知间隔，减少频繁更新以优化蓝牙播放
+        self.player.setNotifyInterval(100)  # 设置为100ms，减少CPU占用
         
         # 播放状态
         self.is_playing = False
@@ -552,10 +555,15 @@ class MusicPlayer(QMainWindow):
         # 连接信号
         self.connect_signals()
         
-        # 定时器更新进度
+        # 定时器更新进度 - 减少更新频率以优化蓝牙播放
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
-        self.timer.start(1000)
+        self.timer.start(1000)  # 保持1秒更新一次进度条
+        
+        # 添加音频状态监控定时器
+        self.audio_monitor_timer = QTimer()
+        self.audio_monitor_timer.timeout.connect(self.monitor_audio_status)
+        self.audio_monitor_timer.start(1000)  # 每1秒检查一次音频状态
         
         # 加载上次的播放列表
         self.load_last_playlist()
@@ -642,6 +650,12 @@ class MusicPlayer(QMainWindow):
             self.reset_hotkey_btn.clicked.connect(self.reset_global_hotkeys)
             self.reset_hotkey_btn.setToolTip("重置全局快捷键为默认设置\n默认设置: Ctrl+Alt+M/P/Left/Right")
             top_layout.addWidget(self.reset_hotkey_btn)
+        
+        # 音频设备选择按钮
+        self.audio_device_btn = QPushButton("音频设备设置")
+        self.audio_device_btn.clicked.connect(self.show_audio_device_settings)
+        self.audio_device_btn.setToolTip("选择音频输出设备，可能帮助解决蓝牙耳机播放问题")
+        top_layout.addWidget(self.audio_device_btn)
         
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
@@ -1558,6 +1572,66 @@ class MusicPlayer(QMainWindow):
         # 此方法现在由独立进程处理，主窗口不需要特别处理
         pass
 
+    def monitor_audio_status(self):
+        """监控音频状态，处理蓝牙连接问题"""
+        if self.player.state() == QMediaPlayer.PlayingState:
+            # 检查音频是否正常播放
+            current_pos = self.player.position()
+            if hasattr(self, 'last_position') and current_pos == self.last_position:
+                # 位置没有变化，可能是蓝牙连接问题
+                print("检测到音频可能卡顿，尝试重新设置音频...")
+                self.restart_audio_if_needed()
+            self.last_position = current_pos
+    
+    def restart_audio_if_needed(self):
+        """在检测到音频问题时重新启动音频"""
+        if self.player.state() == QMediaPlayer.PlayingState:
+            current_pos = self.player.position()
+            current_media = self.player.media()
+            
+            # 暂停并重新播放
+            self.player.pause()
+            QTimer.singleShot(100, lambda: self.resume_audio(current_pos, current_media))
+    
+    def resume_audio(self, position, media):
+        """恢复音频播放"""
+        self.player.setMedia(media)
+        self.player.setPosition(position)
+        self.player.play()
+    
+    def show_audio_device_settings(self):
+        """显示音频设备设置对话框"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("音频设备设置")
+        msg.setText("蓝牙耳机播放问题解决方案:")
+        msg.setInformativeText(
+            "如果您的蓝牙耳机播放声音断断续续，可以尝试以下方法：\n\n"
+            "1. 在Windows音频设置中：\n"
+            "   - 右键点击系统托盘中的音量图标\n"
+            "   - 选择'声音设置'\n"
+            "   - 在'输出'部分选择您的蓝牙耳机\n"
+            "   - 点击'设备属性'，调整音频质量\n\n"
+            "2. 在蓝牙设置中：\n"
+            "   - 断开并重新连接蓝牙耳机\n"
+            "   - 确保蓝牙驱动程序是最新的\n\n"
+            "3. 如果问题持续，请尝试：\n"
+            "   - 重新启动播放器\n"
+            "   - 重新启动蓝牙服务\n"
+            "   - 将音频文件转换为更兼容的格式(MP3/WAV)"
+        )
+        msg.setIcon(QMessageBox.Information)
+        msg.addButton("打开Windows音频设置", QMessageBox.ActionRole)
+        msg.addButton("确定", QMessageBox.AcceptRole)
+        
+        result = msg.exec_()
+        if result == 0:  # 用户点击了"打开Windows音频设置"
+            try:
+                import subprocess
+                subprocess.run(['ms-settings:sound'], shell=True)
+            except Exception as e:
+                print(f"无法打开Windows音频设置: {e}")
+                QMessageBox.warning(self, "错误", "无法打开Windows音频设置，请手动打开。")
+    
     def quit_application(self):
         """退出应用程序"""
         # 停止全局快捷键进程
@@ -1567,6 +1641,10 @@ class MusicPlayer(QMainWindow):
         # 停止事件监听定时器
         if hasattr(self, 'hotkey_event_timer'):
             self.hotkey_event_timer.stop()
+        
+        # 停止音频监控定时器
+        if hasattr(self, 'audio_monitor_timer'):
+            self.audio_monitor_timer.stop()
         
         # 保存当前播放列表
         self.save_playlist()
@@ -1579,6 +1657,9 @@ def main():
     if __name__ == '__main__':
         multiprocessing.freeze_support()
         
+    # 强制使用WMF后端，尝试解决蓝牙耳机播放问题
+    os.environ['QT_MULTIMEDIA_PREFERRED_PLUGINS'] = 'windowsmediafoundation'
+    
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 关闭最后一个窗口时不退出程序
     
