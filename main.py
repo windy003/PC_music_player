@@ -11,6 +11,8 @@ try:
     import win32api
     import win32con
     import win32gui
+    import ctypes
+    from ctypes import wintypes
     GLOBAL_HOTKEY_AVAILABLE = True
 except ImportError:
     GLOBAL_HOTKEY_AVAILABLE = False
@@ -152,7 +154,50 @@ class GlobalHotkeyProcess:
         """全局快捷键进程主函数"""
         if not GLOBAL_HOTKEY_AVAILABLE:
             return
-        
+
+        # 创建消息窗口用于接收热键消息
+        message_hwnd = None
+        try:
+            # 定义窗口类
+            wc = win32gui.WNDCLASS()
+            wc.lpfnWndProc = lambda hwnd, msg, wp, lp: win32gui.DefWindowProc(hwnd, msg, wp, lp)
+            wc.lpszClassName = "HotkeyMessageWindow"
+            wc.hInstance = win32api.GetModuleHandle(None)
+
+            # 注册窗口类
+            class_atom = win32gui.RegisterClass(wc)
+
+            # 创建一个隐藏的真实窗口（而不是消息窗口）
+            # 全局热键需要真实窗口，不能使用 HWND_MESSAGE
+            message_hwnd = win32gui.CreateWindowEx(
+                win32con.WS_EX_TOOLWINDOW,      # dwExStyle (工具窗口，不显示在任务栏)
+                class_atom,                     # lpClassName
+                "HotkeyWindow",                 # lpWindowName
+                win32con.WS_POPUP,              # dwStyle (弹出窗口，无边框)
+                -100, -100, 1, 1,              # x, y, width, height (屏幕外的1x1像素)
+                None,                           # hWndParent
+                0, wc.hInstance, None
+            )
+            print(f"热键窗口已创建: {message_hwnd}")
+
+            # 确保窗口完全隐藏（不显示在任务栏和屏幕上）
+            if message_hwnd:
+                # SW_HIDE = 0, 完全隐藏窗口
+                win32gui.ShowWindow(message_hwnd, 0)
+
+            # 初始化消息队列 - 这很关键！
+            # 创建窗口后需要处理一次消息以完全初始化
+            win32gui.PumpWaitingMessages()
+
+        except Exception as e:
+            print(f"创建消息窗口失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+        if not message_hwnd:
+            print("错误: 无法创建消息窗口，全局快捷键功能不可用")
+            return
+
         registered_hotkeys = []
         running = True
         
@@ -200,15 +245,16 @@ class GlobalHotkeyProcess:
         def register_hotkeys():
             """注册热键"""
             nonlocal registered_hotkeys
-            
+
             # 先注销已注册的热键
             for hotkey_id in registered_hotkeys:
                 try:
-                    win32gui.UnregisterHotKey(None, hotkey_id)
+                    user32 = ctypes.windll.user32
+                    user32.UnregisterHotKey(wintypes.HWND(message_hwnd), ctypes.c_int(hotkey_id))
                 except:
                     pass
             registered_hotkeys.clear()
-            
+
             # 注册新的热键
             hotkey_ids = {
                 'show_window': 1,
@@ -216,7 +262,7 @@ class GlobalHotkeyProcess:
                 'previous_song': 3,
                 'next_song': 4
             }
-            
+
             success_count = 0
             for action, hotkey_str in hotkeys.items():
                 hotkey_id = hotkey_ids.get(action)
@@ -224,13 +270,30 @@ class GlobalHotkeyProcess:
                     key_code = parse_hotkey(hotkey_str)
                     if key_code:
                         try:
-                            result = win32gui.RegisterHotKey(None, hotkey_id, key_code[0], key_code[1])
+                            # 检查窗口句柄是否有效
+                            if not message_hwnd or not win32gui.IsWindow(message_hwnd):
+                                print(f"✗ 窗口句柄无效: {message_hwnd}")
+                                continue
+
+                            print(f"尝试注册: {action} = {hotkey_str}, 键码 = {key_code}, 窗口 = {message_hwnd}")
+
+                            # 使用 ctypes 直接调用 Windows API (在独立进程中更可靠)
+                            user32 = ctypes.windll.user32
+                            result = user32.RegisterHotKey(
+                                wintypes.HWND(message_hwnd),
+                                ctypes.c_int(hotkey_id),
+                                ctypes.c_uint(key_code[0]),
+                                ctypes.c_uint(key_code[1])
+                            )
+                            error_code = ctypes.get_last_error() if result == 0 else 0
+
+                            print(f"RegisterHotKey 返回: {result}, 错误码: {error_code}")
+
                             if result:
                                 registered_hotkeys.append(hotkey_id)
                                 success_count += 1
                                 print(f"✓ 进程注册热键成功 {action}: {hotkey_str}")
                             else:
-                                error_code = win32api.GetLastError()
                                 if error_code == 1409:
                                     print(f"✗ 热键被占用 {action}: {hotkey_str}")
                                 elif error_code == 1419:
@@ -239,6 +302,8 @@ class GlobalHotkeyProcess:
                                     print(f"✗ 注册失败 {action}: {hotkey_str} (错误: {error_code})")
                         except Exception as e:
                             print(f"✗ 注册异常 {action}: {hotkey_str} - {e}")
+                            import traceback
+                            traceback.print_exc()
             
             print(f"全局快捷键进程注册完成: {success_count}/{len(hotkeys)} 个成功")
             return success_count > 0
@@ -247,11 +312,11 @@ class GlobalHotkeyProcess:
             # 初始注册热键
             if not register_hotkeys():
                 print("进程: 所有热键注册失败，可能需要管理员权限")
-            
-            # 主消息循环
+
+            # 主消息循环 - 使用 GetMessage 而不是 PeekMessage
             while running:
                 try:
-                    # 检查命令
+                    # 检查命令（非阻塞）
                     try:
                         cmd = command_queue.get_nowait()
                         if cmd[0] == 'stop':
@@ -262,24 +327,33 @@ class GlobalHotkeyProcess:
                             register_hotkeys()
                     except:
                         pass
-                    
-                    # 检查热键消息
-                    msg = win32gui.PeekMessage(None, 0, 0, win32con.PM_REMOVE)
-                    if msg and msg[1][1] == win32con.WM_HOTKEY:
-                        hotkey_id = msg[1][2]
-                        if hotkey_id == 1:
-                            event_queue.put('show_window')
-                        elif hotkey_id == 2:
-                            event_queue.put('toggle_play')
-                        elif hotkey_id == 3:
-                            event_queue.put('previous_song')
-                        elif hotkey_id == 4:
-                            event_queue.put('next_song')
-                    
+
+                    # 检查热键消息（非阻塞）
+                    try:
+                        # 使用 PeekMessage 非阻塞检查消息
+                        result = win32gui.PeekMessage(message_hwnd, win32con.WM_HOTKEY, win32con.WM_HOTKEY, win32con.PM_REMOVE)
+                        if result:
+                            msg = result[1]
+                            if msg == win32con.WM_HOTKEY:
+                                hotkey_id = result[2]
+                                if hotkey_id == 1:
+                                    event_queue.put('show_window')
+                                elif hotkey_id == 2:
+                                    event_queue.put('toggle_play')
+                                elif hotkey_id == 3:
+                                    event_queue.put('previous_song')
+                                elif hotkey_id == 4:
+                                    event_queue.put('next_song')
+                    except Exception as peek_error:
+                        # PeekMessage 可能在没有消息时抛出异常
+                        pass
+
                     time.sleep(0.01)
-                    
+
                 except Exception as e:
                     print(f"进程消息循环错误: {e}")
+                    import traceback
+                    traceback.print_exc()
                     break
         
         except Exception as e:
@@ -289,9 +363,25 @@ class GlobalHotkeyProcess:
             # 清理注册的热键
             for hotkey_id in registered_hotkeys:
                 try:
-                    win32gui.UnregisterHotKey(None, hotkey_id)
+                    if message_hwnd:
+                        user32 = ctypes.windll.user32
+                        user32.UnregisterHotKey(wintypes.HWND(message_hwnd), ctypes.c_int(hotkey_id))
                 except:
                     pass
+
+            # 销毁消息窗口
+            if message_hwnd:
+                try:
+                    win32gui.DestroyWindow(message_hwnd)
+                except:
+                    pass
+
+            # 取消注册窗口类
+            try:
+                win32gui.UnregisterClass("HotkeyMessageWindow", win32api.GetModuleHandle(None))
+            except:
+                pass
+
             print("全局快捷键进程已清理并退出")
 
 
@@ -490,14 +580,13 @@ class MusicPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("音乐播放器:2025/07/23-02")
-        self.setGeometry(100, 100, 800, 600)
-        
+
         # 设置应用图标
         icon_path = self.get_resource_path("1024x1024.png")
         self.setWindowIcon(QIcon(icon_path))
-        
-        # 设置默认最大化
-        self.showMaximized()
+
+        # 设置窗口初始大小（用于非最大化状态）
+        self.setGeometry(100, 100, 800, 600)
         
         # 初始化媒体播放器
         self.player = QMediaPlayer()
@@ -575,6 +664,9 @@ class MusicPlayer(QMainWindow):
             self.hotkey_event_timer = QTimer()
             self.hotkey_event_timer.timeout.connect(self.check_hotkey_events)
             self.hotkey_event_timer.start(50)  # 每50ms检查一次事件
+
+        # 设置窗口最大化（在所有初始化完成后）
+        self.setWindowState(Qt.WindowMaximized)
 
     def event(self, event):
         """处理自定义事件"""
