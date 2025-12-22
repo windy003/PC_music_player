@@ -307,14 +307,19 @@ class GlobalHotkeyProcess:
             
             print(f"全局快捷键进程注册完成: {success_count}/{len(hotkeys)} 个成功")
             return success_count > 0
-        
+
         try:
             # 初始注册热键
             if not register_hotkeys():
                 print("进程: 所有热键注册失败，可能需要管理员权限")
 
+            print("进程: 开始进入消息循环...")
             # 主消息循环 - 使用 GetMessage 而不是 PeekMessage
+            loop_count = 0
             while running:
+                loop_count += 1
+                if loop_count % 100 == 0:
+                    print(f"进程: 消息循环运行中... (循环次数: {loop_count})")
                 try:
                     # 检查命令（非阻塞）
                     try:
@@ -330,22 +335,36 @@ class GlobalHotkeyProcess:
 
                     # 检查热键消息（非阻塞）
                     try:
-                        # 使用 PeekMessage 非阻塞检查消息
-                        result = win32gui.PeekMessage(message_hwnd, win32con.WM_HOTKEY, win32con.WM_HOTKEY, win32con.PM_REMOVE)
+                        # 使用 ctypes 直接调用 PeekMessageW
+                        msg = wintypes.MSG()
+                        result = ctypes.windll.user32.PeekMessageW(
+                            ctypes.byref(msg),
+                            wintypes.HWND(message_hwnd),
+                            win32con.WM_HOTKEY,
+                            win32con.WM_HOTKEY,
+                            win32con.PM_REMOVE
+                        )
+
                         if result:
-                            msg = result[1]
-                            if msg == win32con.WM_HOTKEY:
-                                hotkey_id = result[2]
-                                if hotkey_id == 1:
-                                    event_queue.put('show_window')
-                                elif hotkey_id == 2:
-                                    event_queue.put('toggle_play')
-                                elif hotkey_id == 3:
-                                    event_queue.put('previous_song')
-                                elif hotkey_id == 4:
-                                    event_queue.put('next_song')
+                            # msg.wParam 包含 hotkey_id
+                            hotkey_id = msg.wParam
+                            print(f"进程: 收到热键消息! ID={hotkey_id}")
+                            if hotkey_id == 1:
+                                event_queue.put('show_window')
+                                print("进程: 已发送 show_window 事件")
+                            elif hotkey_id == 2:
+                                event_queue.put('toggle_play')
+                                print("进程: 已发送 toggle_play 事件")
+                            elif hotkey_id == 3:
+                                event_queue.put('previous_song')
+                                print("进程: 已发送 previous_song 事件")
+                            elif hotkey_id == 4:
+                                event_queue.put('next_song')
+                                print("进程: 已发送 next_song 事件")
                     except Exception as peek_error:
-                        # PeekMessage 可能在没有消息时抛出异常
+                        # 打印异常信息以便调试
+                        if loop_count % 100 == 0:
+                            print(f"进程: PeekMessage 异常: {peek_error}")
                         pass
 
                     time.sleep(0.01)
@@ -688,16 +707,22 @@ class MusicPlayer(QMainWindow):
         """检查全局快捷键事件"""
         if not self.global_hotkey_process:
             return
-        
+
         events = self.global_hotkey_process.get_events()
+        if events:
+            print(f"主进程: 收到 {len(events)} 个事件: {events}")
         for event in events:
             if event == 'show_window':
+                print("主进程: 执行 show_window")
                 self.show_window()
             elif event == 'toggle_play':
+                print("主进程: 执行 toggle_play")
                 self.toggle_play()
             elif event == 'previous_song':
+                print("主进程: 执行 previous_song")
                 self.previous_song()
             elif event == 'next_song':
+                print("主进程: 执行 next_song")
                 self.next_song()
 
     def init_ui(self):
@@ -1745,10 +1770,6 @@ class MusicPlayer(QMainWindow):
 
 
 def main():
-    # Windows multiprocessing 支持
-    if __name__ == '__main__':
-        multiprocessing.freeze_support()
-        
     # 强制使用WMF后端，尝试解决蓝牙耳机播放问题
     os.environ['QT_MULTIMEDIA_PREFERRED_PLUGINS'] = 'windowsmediafoundation'
     
@@ -1775,4 +1796,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows multiprocessing 支持 - 必须在最开始调用
+    multiprocessing.freeze_support()
     main() 
