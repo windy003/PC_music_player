@@ -602,7 +602,18 @@ class MusicPlayer(QMainWindow):
 
         # 设置应用图标
         icon_path = self.get_resource_path("1024x1024.png")
-        self.setWindowIcon(QIcon(icon_path))
+        self.app_icon = QIcon(icon_path)
+        self.setWindowIcon(self.app_icon)
+
+        # Windows 特定：设置任务栏图标
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                # 设置应用程序 ID，确保任务栏图标正确显示
+                myappid = 'mycompany.musicplayer.version1'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except:
+                pass
 
         # 设置窗口初始大小（用于非最大化状态）
         self.setGeometry(100, 100, 800, 600)
