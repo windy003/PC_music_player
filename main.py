@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings, QEvent
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
+import pygame
 import mutagen
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3NoHeaderError
@@ -63,33 +64,29 @@ class GlobalHotkeyProcess:
         self.event_queue = None
         self.is_running = False
         
-        # 默认快捷键设置
+        # 默认快捷键设置（使用 Ctrl+Alt+Shift 组合，避免冲突）
         self.hotkeys = {
-            'show_window': 'Ctrl+Alt+M',
-            'toggle_play': 'Ctrl+Alt+P',
-            'previous_song': 'Ctrl+Alt+Left',
-            'next_song': 'Ctrl+Alt+Right'
+            'show_window': 'Ctrl+Alt+Shift+M',
+            'toggle_play': 'Ctrl+Alt+Shift+P',
+            'previous_song': 'Ctrl+Alt+Shift+Left',
+            'next_song': 'Ctrl+Alt+Shift+Right'
         }
     
     def start(self, hotkeys=None):
         """启动全局快捷键进程"""
         if not GLOBAL_HOTKEY_AVAILABLE:
-            print("全局快捷键功能不可用")
             return False
-        
+
         if self.is_running:
-            print("全局快捷键进程已在运行")
             return True
-        
+
         if hotkeys:
             self.hotkeys.update(hotkeys)
-        
+
         try:
-            # 创建进程间通信队列
             self.command_queue = multiprocessing.Queue()
             self.event_queue = multiprocessing.Queue()
-            
-            # 启动独立进程
+
             self.process = multiprocessing.Process(
                 target=self._hotkey_process_main,
                 args=(self.hotkeys, self.command_queue, self.event_queue),
@@ -97,36 +94,29 @@ class GlobalHotkeyProcess:
             )
             self.process.start()
             self.is_running = True
-            
-            print("全局快捷键进程已启动")
             return True
-            
-        except Exception as e:
-            print(f"启动全局快捷键进程失败: {e}")
+
+        except Exception:
             return False
     
     def stop(self):
         """停止全局快捷键进程"""
         if not self.is_running:
             return
-        
+
         try:
-            # 发送停止命令
             if self.command_queue:
                 self.command_queue.put(('stop',))
-            
-            # 等待进程结束
+
             if self.process and self.process.is_alive():
                 self.process.join(timeout=2.0)
                 if self.process.is_alive():
                     self.process.terminate()
                     self.process.join()
-            
+
             self.is_running = False
-            print("全局快捷键进程已停止")
-            
-        except Exception as e:
-            print(f"停止全局快捷键进程时出错: {e}")
+        except Exception:
+            pass
     
     def update_hotkeys(self, hotkeys):
         """更新快捷键设置"""
@@ -178,24 +168,15 @@ class GlobalHotkeyProcess:
                 None,                           # hWndParent
                 0, wc.hInstance, None
             )
-            print(f"热键窗口已创建: {message_hwnd}")
-
-            # 确保窗口完全隐藏（不显示在任务栏和屏幕上）
+            # 确保窗口完全隐藏
             if message_hwnd:
-                # SW_HIDE = 0, 完全隐藏窗口
                 win32gui.ShowWindow(message_hwnd, 0)
-
-            # 初始化消息队列 - 这很关键！
-            # 创建窗口后需要处理一次消息以完全初始化
             win32gui.PumpWaitingMessages()
 
-        except Exception as e:
-            print(f"创建消息窗口失败: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            pass
 
         if not message_hwnd:
-            print("错误: 无法创建消息窗口，全局快捷键功能不可用")
             return
 
         registered_hotkeys = []
@@ -250,7 +231,7 @@ class GlobalHotkeyProcess:
             for hotkey_id in registered_hotkeys:
                 try:
                     user32 = ctypes.windll.user32
-                    user32.UnregisterHotKey(wintypes.HWND(message_hwnd), ctypes.c_int(hotkey_id))
+                    user32.UnregisterHotKey(None, hotkey_id)  # 使用 NULL
                 except:
                     pass
             registered_hotkeys.clear()
@@ -270,56 +251,34 @@ class GlobalHotkeyProcess:
                     key_code = parse_hotkey(hotkey_str)
                     if key_code:
                         try:
-                            # 检查窗口句柄是否有效
-                            if not message_hwnd or not win32gui.IsWindow(message_hwnd):
-                                print(f"✗ 窗口句柄无效: {message_hwnd}")
-                                continue
-
-                            print(f"尝试注册: {action} = {hotkey_str}, 键码 = {key_code}, 窗口 = {message_hwnd}")
-
-                            # 使用 ctypes 直接调用 Windows API (在独立进程中更可靠)
                             user32 = ctypes.windll.user32
-                            result = user32.RegisterHotKey(
-                                wintypes.HWND(message_hwnd),
-                                ctypes.c_int(hotkey_id),
-                                ctypes.c_uint(key_code[0]),
-                                ctypes.c_uint(key_code[1])
-                            )
-                            error_code = ctypes.get_last_error() if result == 0 else 0
+                            kernel32 = ctypes.windll.kernel32
+                            kernel32.SetLastError(0)
 
-                            print(f"RegisterHotKey 返回: {result}, 错误码: {error_code}")
+                            result = user32.RegisterHotKey(
+                                None,
+                                hotkey_id,
+                                key_code[0],
+                                key_code[1]
+                            )
 
                             if result:
                                 registered_hotkeys.append(hotkey_id)
                                 success_count += 1
-                                print(f"✓ 进程注册热键成功 {action}: {hotkey_str}")
-                            else:
-                                if error_code == 1409:
-                                    print(f"✗ 热键被占用 {action}: {hotkey_str}")
-                                elif error_code == 1419:
-                                    print(f"✗ 权限不足 {action}: {hotkey_str}")
-                                else:
-                                    print(f"✗ 注册失败 {action}: {hotkey_str} (错误: {error_code})")
-                        except Exception as e:
-                            print(f"✗ 注册异常 {action}: {hotkey_str} - {e}")
-                            import traceback
-                            traceback.print_exc()
+                        except Exception:
+                            pass
             
-            print(f"全局快捷键进程注册完成: {success_count}/{len(hotkeys)} 个成功")
+            # 通知主进程注册结果
+            if success_count < len(hotkeys):
+                failed_count = len(hotkeys) - success_count
+                event_queue.put(('hotkey_failed', failed_count))
             return success_count > 0
 
         try:
             # 初始注册热键
-            if not register_hotkeys():
-                print("进程: 所有热键注册失败，可能需要管理员权限")
-
-            print("进程: 开始进入消息循环...")
-            # 主消息循环 - 使用 GetMessage 而不是 PeekMessage
-            loop_count = 0
+            register_hotkeys()
+            # 主消息循环
             while running:
-                loop_count += 1
-                if loop_count % 100 == 0:
-                    print(f"进程: 消息循环运行中... (循环次数: {loop_count})")
                 try:
                     # 检查命令（非阻塞）
                     try:
@@ -336,10 +295,11 @@ class GlobalHotkeyProcess:
                     # 检查热键消息（非阻塞）
                     try:
                         # 使用 ctypes 直接调用 PeekMessageW
+                        # 使用 NULL 窗口句柄获取线程消息队列中的热键消息
                         msg = wintypes.MSG()
                         result = ctypes.windll.user32.PeekMessageW(
                             ctypes.byref(msg),
-                            wintypes.HWND(message_hwnd),
+                            None,  # NULL - 获取线程的所有消息
                             win32con.WM_HOTKEY,
                             win32con.WM_HOTKEY,
                             win32con.PM_REMOVE
@@ -348,43 +308,30 @@ class GlobalHotkeyProcess:
                         if result:
                             # msg.wParam 包含 hotkey_id
                             hotkey_id = msg.wParam
-                            print(f"进程: 收到热键消息! ID={hotkey_id}")
                             if hotkey_id == 1:
                                 event_queue.put('show_window')
-                                print("进程: 已发送 show_window 事件")
                             elif hotkey_id == 2:
                                 event_queue.put('toggle_play')
-                                print("进程: 已发送 toggle_play 事件")
                             elif hotkey_id == 3:
                                 event_queue.put('previous_song')
-                                print("进程: 已发送 previous_song 事件")
                             elif hotkey_id == 4:
                                 event_queue.put('next_song')
-                                print("进程: 已发送 next_song 事件")
-                    except Exception as peek_error:
-                        # 打印异常信息以便调试
-                        if loop_count % 100 == 0:
-                            print(f"进程: PeekMessage 异常: {peek_error}")
+                    except Exception:
                         pass
 
                     time.sleep(0.01)
 
-                except Exception as e:
-                    print(f"进程消息循环错误: {e}")
-                    import traceback
-                    traceback.print_exc()
+                except Exception:
                     break
-        
-        except Exception as e:
-            print(f"全局快捷键进程错误: {e}")
+
+        except Exception:
+            pass
         
         finally:
             # 清理注册的热键
             for hotkey_id in registered_hotkeys:
                 try:
-                    if message_hwnd:
-                        user32 = ctypes.windll.user32
-                        user32.UnregisterHotKey(wintypes.HWND(message_hwnd), ctypes.c_int(hotkey_id))
+                    ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
                 except:
                     pass
 
@@ -395,13 +342,10 @@ class GlobalHotkeyProcess:
                 except:
                     pass
 
-            # 取消注册窗口类
             try:
                 win32gui.UnregisterClass("HotkeyMessageWindow", win32api.GetModuleHandle(None))
             except:
                 pass
-
-            print("全局快捷键进程已清理并退出")
 
 
 # 自定义按键捕获输入框
@@ -617,20 +561,27 @@ class MusicPlayer(QMainWindow):
 
         # 设置窗口初始大小（用于非最大化状态）
         self.setGeometry(100, 100, 800, 600)
-        
-        # 初始化媒体播放器
-        self.player = QMediaPlayer()
-        self.playlist = QMediaPlaylist()
-        self.player.setPlaylist(self.playlist)
-        
-        # 设置音频输出的通知间隔，减少频繁更新以优化蓝牙播放
-        self.player.setNotifyInterval(100)  # 设置为100ms，减少CPU占用
-        
+
+        # 初始化 pygame 音频
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+        except Exception:
+            try:
+                pygame.mixer.init()
+            except Exception:
+                pass
+
         # 播放状态
         self.is_playing = False
         self.current_position = 0
         self.duration = 0
         self.volume = 70
+        self.current_index = -1  # 当前播放的歌曲索引
+        self.music_loaded = False  # 标记是否已加载音乐文件
+
+        # 设置初始音量 (pygame 音量范围 0.0-1.0)
+        pygame.mixer.music.set_volume(self.volume / 100.0)
         
         # 播放模式 0:顺序播放 1:单曲循环 2:随机播放
         self.play_mode = 0
@@ -650,15 +601,23 @@ class MusicPlayer(QMainWindow):
         
         # 全局快捷键进程管理器
         self.global_hotkey_process = None
+        self.hotkey_failed_shown = False  # 防止重复弹出对话框
         if GLOBAL_HOTKEY_AVAILABLE:
             self.global_hotkey_process = GlobalHotkeyProcess()
             
-            # 从设置中加载快捷键
+            # 从设置中加载快捷键（默认使用 Ctrl+Alt+Shift 避免冲突）
+            old_show_key = self.settings.value("global_show_key", "", type=str)
+            if old_show_key and not old_show_key.startswith("Ctrl+Alt+Shift"):
+                self.settings.remove("global_show_key")
+                self.settings.remove("global_play_key")
+                self.settings.remove("global_prev_key")
+                self.settings.remove("global_next_key")
+
             hotkeys = {
-                'show_window': self.settings.value("global_show_key", "Ctrl+Alt+M", type=str),
-                'toggle_play': self.settings.value("global_play_key", "Ctrl+Alt+P", type=str),
-                'previous_song': self.settings.value("global_prev_key", "Ctrl+Alt+Left", type=str),
-                'next_song': self.settings.value("global_next_key", "Ctrl+Alt+Right", type=str)
+                'show_window': self.settings.value("global_show_key", "Ctrl+Alt+Shift+M", type=str),
+                'toggle_play': self.settings.value("global_play_key", "Ctrl+Alt+Shift+P", type=str),
+                'previous_song': self.settings.value("global_prev_key", "Ctrl+Alt+Shift+Left", type=str),
+                'next_song': self.settings.value("global_next_key", "Ctrl+Alt+Shift+Right", type=str)
             }
             self.global_hotkey_process.hotkeys = hotkeys
         
@@ -679,24 +638,29 @@ class MusicPlayer(QMainWindow):
         self.timer.timeout.connect(self.update_progress)
         self.timer.start(1000)  # 保持1秒更新一次进度条
         
-        # 添加音频状态监控定时器
-        self.audio_monitor_timer = QTimer()
-        self.audio_monitor_timer.timeout.connect(self.monitor_audio_status)
-        self.audio_monitor_timer.start(1000)  # 每1秒检查一次音频状态
+        # 音频状态监控定时器（已禁用，因为会导致播放循环问题）
+        # self.audio_monitor_timer = QTimer()
+        # self.audio_monitor_timer.timeout.connect(self.monitor_audio_status)
+        # self.audio_monitor_timer.start(1000)
         
         # 加载上次的播放列表
         self.load_last_playlist()
         
-        # 初始化全局快捷键进程
+        # 延迟初始化全局快捷键进程（避免与窗口初始化冲突）
+        if self.global_hotkey_process:
+            QTimer.singleShot(500, self.start_global_hotkey_process)
+
+        # 设置窗口最大化（在所有初始化完成后）
+        self.setWindowState(Qt.WindowMaximized)
+
+    def start_global_hotkey_process(self):
+        """延迟启动全局快捷键进程"""
         if self.global_hotkey_process:
             self.global_hotkey_process.start()
             # 启动事件监听定时器
             self.hotkey_event_timer = QTimer()
             self.hotkey_event_timer.timeout.connect(self.check_hotkey_events)
             self.hotkey_event_timer.start(50)  # 每50ms检查一次事件
-
-        # 设置窗口最大化（在所有初始化完成后）
-        self.setWindowState(Qt.WindowMaximized)
 
     def event(self, event):
         """处理自定义事件"""
@@ -719,22 +683,44 @@ class MusicPlayer(QMainWindow):
         if not self.global_hotkey_process:
             return
 
-        events = self.global_hotkey_process.get_events()
-        if events:
-            print(f"主进程: 收到 {len(events)} 个事件: {events}")
+        try:
+            events = self.global_hotkey_process.get_events()
+        except Exception as e:
+            return
+
         for event in events:
-            if event == 'show_window':
-                print("主进程: 执行 show_window")
+            # 处理元组事件（如热键注册失败通知）
+            if isinstance(event, tuple):
+                if event[0] == 'hotkey_failed':
+                    # 显示热键注册失败对话框
+                    QTimer.singleShot(500, self.show_hotkey_failed_dialog)
+            elif event == 'show_window':
                 self.show_window()
             elif event == 'toggle_play':
-                print("主进程: 执行 toggle_play")
                 self.toggle_play()
             elif event == 'previous_song':
-                print("主进程: 执行 previous_song")
                 self.previous_song()
             elif event == 'next_song':
-                print("主进程: 执行 next_song")
                 self.next_song()
+
+    def show_hotkey_failed_dialog(self):
+        """显示热键注册失败对话框"""
+        # 防止重复弹出
+        if self.hotkey_failed_shown:
+            return
+        self.hotkey_failed_shown = True
+
+        reply = QMessageBox.warning(
+            self,
+            "全局快捷键注册失败",
+            "部分或全部全局快捷键被其他程序占用。\n\n"
+            "是否打开快捷键设置来自定义新的快捷键组合？\n\n"
+            "提示：建议使用 Ctrl+Shift 或 Ctrl+Alt+Shift 组合",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply == QMessageBox.Yes:
+            self.show_global_hotkey_settings()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -756,7 +742,13 @@ class MusicPlayer(QMainWindow):
         self.open_folder_btn = QPushButton("打开文件夹 (Alt+F)")
         self.open_folder_btn.clicked.connect(self.open_folder)
         top_layout.addWidget(self.open_folder_btn)
-        
+
+        # 清空播放列表按钮
+        self.clear_all_btn = QPushButton("清空列表")
+        self.clear_all_btn.clicked.connect(self.clear_playlist_and_settings)
+        self.clear_all_btn.setToolTip("清空播放列表并删除保存的记录")
+        top_layout.addWidget(self.clear_all_btn)
+
         # 播放模式选择
         mode_label = QLabel("播放模式 (Alt+M/L):")
         top_layout.addWidget(mode_label)
@@ -903,43 +895,40 @@ class MusicPlayer(QMainWindow):
 
     def init_tray(self):
         """初始化系统托盘"""
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            QMessageBox.critical(None, "系统托盘", "系统托盘不可用")
-            return
-        
-        # 创建系统托盘图标
-        self.tray_icon = QSystemTrayIcon(self)
-        
-        # 设置图标（使用自定义图标）
-        icon_path = self.get_resource_path("1024x1024.png")
-        self.tray_icon.setIcon(QIcon(icon_path))
-        
-        # 创建托盘菜单
-        tray_menu = QMenu()
-        
-        show_action = QAction("显示", self)
-        show_action.triggered.connect(self.show_window)
-        tray_menu.addAction(show_action)
-        
-        play_action = QAction("播放/暂停", self)
-        play_action.triggered.connect(self.toggle_play)
-        tray_menu.addAction(play_action)
-        
-        next_action = QAction("下一曲", self)
-        next_action.triggered.connect(self.next_song)
-        tray_menu.addAction(next_action)
-        
-        tray_menu.addSeparator()
-        
-        quit_action = QAction("退出 (&X)", self)
-        quit_action.triggered.connect(self.quit_application)
-        tray_menu.addAction(quit_action)
-        
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.tray_icon_activated)
-        
-        # 显示托盘图标
-        self.tray_icon.show()
+        try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                self.tray_icon = None
+                return
+
+            self.tray_icon = QSystemTrayIcon(self)
+            icon_path = self.get_resource_path("1024x1024.png")
+            self.tray_icon.setIcon(QIcon(icon_path))
+
+            tray_menu = QMenu()
+
+            show_action = QAction("显示", self)
+            show_action.triggered.connect(self.show_window)
+            tray_menu.addAction(show_action)
+
+            play_action = QAction("播放/暂停", self)
+            play_action.triggered.connect(self.toggle_play)
+            tray_menu.addAction(play_action)
+
+            next_action = QAction("下一曲", self)
+            next_action.triggered.connect(self.next_song)
+            tray_menu.addAction(next_action)
+
+            tray_menu.addSeparator()
+
+            quit_action = QAction("退出 (&X)", self)
+            quit_action.triggered.connect(self.quit_application)
+            tray_menu.addAction(quit_action)
+
+            self.tray_icon.setContextMenu(tray_menu)
+            self.tray_icon.activated.connect(self.tray_icon_activated)
+            self.tray_icon.show()
+        except Exception:
+            self.tray_icon = None
 
     def init_shortcuts(self):
         """初始化快捷键"""
@@ -1013,11 +1002,8 @@ class MusicPlayer(QMainWindow):
 
     def connect_signals(self):
         """连接信号和槽"""
-        self.player.stateChanged.connect(self.player_state_changed)
-        self.player.positionChanged.connect(self.position_changed)
-        self.player.durationChanged.connect(self.duration_changed)
-        self.playlist.currentIndexChanged.connect(self.playlist_position_changed)
-        self.player.mediaStatusChanged.connect(self.media_status_changed)
+        # 已改用 pygame，不再使用 QMediaPlayer 的信号
+        pass
 
     def open_file(self):
         """打开音频文件"""
@@ -1058,39 +1044,53 @@ class MusicPlayer(QMainWindow):
     def clear_playlist(self):
         """清空播放列表"""
         # 停止播放
-        self.player.stop()
-        
+        pygame.mixer.music.stop()
+
         # 清空所有播放列表相关数据
         self.song_list.clear()
-        self.playlist.clear()
         self.playlist_widget.clear()
         self.play_history.clear()
-        
+
         # 重置播放状态
         self.current_position = 0
         self.duration = 0
         self.is_playing = False
-        
+        self.current_index = -1
+        self.music_loaded = False
+
         # 更新UI显示
         self.current_song_label.setText("没有正在播放的歌曲")
         self.progress_slider.setValue(0)
         self.time_label.setText("00:00")
         self.total_time_label.setText("00:00")
+        self.play_btn.setText("播放 (Alt+P/空格)")
+
+    def clear_playlist_and_settings(self):
+        """清空播放列表并删除保存的设置"""
+        # 清空当前播放列表
+        self.clear_playlist()
+
+        # 删除保存的播放列表设置
+        self.settings.remove("playlist_full")
+        self.settings.remove("playlist")
+        self.settings.remove("current_index")
+
 
     def add_files_to_playlist(self, file_paths):
         """添加文件到播放列表"""
         for file_path in file_paths:
+            # 规范化路径
+            file_path = os.path.normpath(file_path)
+
             # 获取歌曲信息
             song_info = self.get_song_info(file_path)
             self.song_list.append(song_info)
-            
-            # 添加到播放列表
-            self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
-            
+
             # 添加到UI列表
             display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
             item = QListWidgetItem(display_text)
             self.playlist_widget.addItem(item)
+
 
     def get_song_info(self, file_path):
         """获取歌曲信息"""
@@ -1126,92 +1126,134 @@ class MusicPlayer(QMainWindow):
                 # 获取时长
                 if hasattr(audio_file, 'info') and hasattr(audio_file.info, 'length'):
                     song_info['duration'] = int(audio_file.info.length)
-        except Exception as e:
-            print(f"读取歌曲信息失败: {e}")
+        except Exception:
+            pass
         
         return song_info
 
     def play_selected_song(self, item):
         """播放选中的歌曲"""
         index = self.playlist_widget.row(item)
-        self.playlist.setCurrentIndex(index)
-        self.player.play()
+        self.play_song_at_index(index)
         # 重置手动跳转标记
         self.user_manual_skip = False
         # 记录到播放历史
         self.add_to_history(index)
 
+    def play_song_at_index(self, index):
+        """播放指定索引的歌曲"""
+        if 0 <= index < len(self.song_list):
+            song_info = self.song_list[index]
+            file_path = song_info['path']
+            try:
+                pygame.mixer.music.load(file_path)
+                self.music_loaded = True
+                pygame.mixer.music.play()
+                self.current_index = index
+                self.is_playing = True
+                self.current_position = 0
+                self.duration = song_info.get('duration', 0) * 1000
+                self.update_current_song_display()
+                self.play_btn.setText("暂停 (Alt+P/空格)")
+            except Exception as e:
+                print(f"播放失败: {e}")
+
     def toggle_play(self):
         """切换播放/暂停"""
-        if self.player.state() == QMediaPlayer.PlayingState:
-            self.player.pause()
-        else:
-            self.player.play()
+        try:
+            if self.is_playing:
+                pygame.mixer.music.pause()
+                self.is_playing = False
+                self.play_btn.setText("播放 (Alt+P/空格)")
+            else:
+                # 如果音乐已加载，恢复播放
+                if self.music_loaded and self.current_index >= 0:
+                    pygame.mixer.music.unpause()
+                    self.is_playing = True
+                    self.play_btn.setText("暂停 (Alt+P/空格)")
+                # 如果音乐未加载但有歌曲列表，播放当前索引或第一首
+                elif len(self.song_list) > 0:
+                    play_index = self.current_index if self.current_index >= 0 else 0
+                    self.play_song_at_index(play_index)
+        except Exception as e:
+            print(f"toggle_play 错误: {e}")
 
     def previous_song(self):
         """上一曲 - 从历史记录中获取上一曲"""
         # 尝试从历史记录获取上一曲
         prev_index = self.get_previous_from_history()
         if prev_index is not None:
-            self.playlist.setCurrentIndex(prev_index)
-            self.player.play()
+            self.play_song_at_index(prev_index)
         else:
             # 如果没有历史记录，随机播放一首歌
-            if self.playlist.mediaCount() > 0:
-                current_index = self.playlist.currentIndex()
-                random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            if len(self.song_list) > 0:
+                random_index = random.randint(0, len(self.song_list) - 1)
                 # 避免选择相同的歌曲
-                while random_index == current_index and self.playlist.mediaCount() > 1:
-                    random_index = random.randint(0, self.playlist.mediaCount() - 1)
-                self.playlist.setCurrentIndex(random_index)
-                self.player.play()
+                while random_index == self.current_index and len(self.song_list) > 1:
+                    random_index = random.randint(0, len(self.song_list) - 1)
+                self.play_song_at_index(random_index)
 
     def next_song(self):
         """下一曲 - 随机播放下一曲"""
-        if self.playlist.mediaCount() > 0:
+        if len(self.song_list) > 0:
             # 记录当前播放的歌曲到历史记录
-            current_index = self.playlist.currentIndex()
-            if current_index >= 0:
-                self.add_to_history(current_index)
-            
+            if self.current_index >= 0:
+                self.add_to_history(self.current_index)
+
             # 随机选择下一曲
-            random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            random_index = random.randint(0, len(self.song_list) - 1)
             # 避免选择相同的歌曲（如果列表中有多首歌）
-            while random_index == current_index and self.playlist.mediaCount() > 1:
-                random_index = random.randint(0, self.playlist.mediaCount() - 1)
-            
-            self.playlist.setCurrentIndex(random_index)
-            self.player.play()
+            while random_index == self.current_index and len(self.song_list) > 1:
+                random_index = random.randint(0, len(self.song_list) - 1)
+
+            self.play_song_at_index(random_index)
 
     def play_random_song(self):
         """播放随机歌曲"""
-        if self.playlist.mediaCount() > 0:
-            random_index = random.randint(0, self.playlist.mediaCount() - 1)
-            self.playlist.setCurrentIndex(random_index)
+        if len(self.song_list) > 0:
+            random_index = random.randint(0, len(self.song_list) - 1)
+            self.play_song_at_index(random_index)
             self.add_to_history(random_index)
 
     def change_play_mode(self, index):
         """改变播放模式"""
         self.play_mode = index
-        if index == 0:  # 顺序播放
-            self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)
-        elif index == 1:  # 单曲循环（智能模式）
-            self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)  # 改为Sequential以便手动控制
+        if index == 1:  # 单曲循环（智能模式）
             self.user_manual_skip = False  # 重置手动跳转标记
-        elif index == 2:  # 随机播放
-            self.playlist.setPlaybackMode(QMediaPlaylist.Sequential)
-        
+
         # 保存播放模式
         self.settings.setValue("play_mode", self.play_mode)
 
     def change_volume(self, value):
         """改变音量"""
         self.volume = value
-        self.player.setVolume(value)
+        pygame.mixer.music.set_volume(value / 100.0)
         self.volume_label.setText(f"{value}%")
-        
+
         # 保存音量设置
         self.settings.setValue("volume", self.volume)
+
+    def update_current_song_display(self):
+        """更新当前歌曲显示"""
+        if 0 <= self.current_index < len(self.song_list):
+            song_info = self.song_list[self.current_index]
+            display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
+            self.current_song_label.setText(display_text)
+
+            # 高亮当前播放的歌曲
+            for i in range(self.playlist_widget.count()):
+                item = self.playlist_widget.item(i)
+                if i == self.current_index:
+                    item.setBackground(Qt.lightGray)
+                else:
+                    item.setBackground(Qt.white)
+
+            # 更新进度条范围
+            self.progress_slider.setRange(0, self.duration)
+            self.total_time_label.setText(self.format_time(self.duration))
+
+            # 保存当前播放位置
+            self.settings.setValue("current_index", self.current_index)
 
     def cycle_play_mode(self):
         """循环切换播放模式"""
@@ -1239,17 +1281,27 @@ class MusicPlayer(QMainWindow):
 
     def seek_backward(self):
         """后退5秒"""
-        current_position = self.player.position()
-        new_position = max(0, current_position - 5000)  # 5秒 = 5000毫秒
-        self.player.setPosition(new_position)
+        if self.is_playing and self.current_index >= 0:
+            # pygame 不支持直接 seek，需要重新播放并跳转
+            new_position = max(0, self.current_position - 5000)
+            self.seek_to_position(new_position)
 
     def seek_forward(self):
         """前进5秒"""
-        current_position = self.player.position()
-        duration = self.player.duration()
-        new_position = min(duration, current_position + 5000)  # 5秒 = 5000毫秒
-        self.player.setPosition(new_position)
-    
+        if self.is_playing and self.current_index >= 0:
+            new_position = min(self.duration, self.current_position + 5000)
+            self.seek_to_position(new_position)
+
+    def seek_to_position(self, position_ms):
+        """跳转到指定位置（毫秒）"""
+        if self.current_index >= 0:
+            try:
+                # pygame.mixer.music.set_pos 使用秒为单位
+                pygame.mixer.music.play(start=position_ms / 1000.0)
+                self.current_position = position_ms
+            except Exception as e:
+                print(f"跳转失败: {e}")
+
     def smart_next_shortcut(self):
         """Alt+右方向键: 智能单曲循环模式下的随机下一曲"""
         if self.play_mode == 1:  # 智能单曲循环模式
@@ -1266,24 +1318,40 @@ class MusicPlayer(QMainWindow):
     def slider_released(self):
         """进度条被释放"""
         position = self.progress_slider.value()
-        self.player.setPosition(position)
+        self.seek_to_position(position)
         self.timer.start()
 
     def update_progress(self):
         """更新进度"""
-        if self.player.state() == QMediaPlayer.PlayingState:
-            position = self.player.position()
-            self.progress_slider.setValue(position)
-            self.time_label.setText(self.format_time(position))
+        if self.is_playing:
+            # 使用 pygame 获取当前播放位置
+            try:
+                pos = pygame.mixer.music.get_pos()  # 返回毫秒
+                if pos >= 0:
+                    self.current_position = pos
+                    self.progress_slider.setValue(pos)
+                    self.time_label.setText(self.format_time(pos))
 
-    def player_state_changed(self, state):
-        """播放器状态改变"""
-        if state == QMediaPlayer.PlayingState:
-            self.play_btn.setText("暂停 (Alt+P/空格)")
-            self.is_playing = True
-        else:
-            self.play_btn.setText("播放 (Alt+P/空格)")
-            self.is_playing = False
+                    # 检查歌曲是否播放结束
+                    if not pygame.mixer.music.get_busy() and self.is_playing:
+                        self.on_song_finished()
+            except:
+                pass
+
+    def on_song_finished(self):
+        """歌曲播放结束"""
+        self.is_playing = False
+        if self.play_mode == 0:  # 顺序播放
+            # 播放下一首（顺序）
+            next_index = self.current_index + 1
+            if next_index < len(self.song_list):
+                self.play_song_at_index(next_index)
+            else:
+                self.play_btn.setText("播放 (Alt+P/空格)")
+        elif self.play_mode == 1:  # 单曲循环
+            self.play_song_at_index(self.current_index)
+        elif self.play_mode == 2:  # 随机播放
+            self.play_random_song()
 
     def position_changed(self, position):
         """播放位置改变"""
@@ -1295,46 +1363,8 @@ class MusicPlayer(QMainWindow):
         self.progress_slider.setRange(0, duration)
         self.total_time_label.setText(self.format_time(duration))
 
-    def playlist_position_changed(self, position):
-        """播放列表位置改变"""
-        if 0 <= position < len(self.song_list):
-            song_info = self.song_list[position]
-            # 优先显示自定义名称，否则显示原始信息
-            display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
-            self.current_song_label.setText(display_text)
-            
-            # 高亮当前播放的歌曲
-            for i in range(self.playlist_widget.count()):
-                item = self.playlist_widget.item(i)
-                if i == position:
-                    item.setBackground(Qt.lightGray)
-                else:
-                    item.setBackground(Qt.white)
-            
-            # 保存当前播放位置
-            self.settings.setValue("current_index", position)
-            
-            # 记录到播放历史（仅在不是手动跳转时）
-            if not self.user_manual_skip:
-                self.add_to_history(position)
-
-    def media_status_changed(self, status):
-        """媒体状态改变处理"""
-        from PyQt5.QtMultimedia import QMediaPlayer
-        
-        # 当歌曲播放结束时
-        if status == QMediaPlayer.EndOfMedia:
-            if self.play_mode == 1:  # 单曲循环模式
-                # 无论是否手动跳转，播放结束后都进行单曲循环
-                current_index = self.playlist.currentIndex()
-                self.playlist.setCurrentIndex(current_index)
-                self.player.play()
-                # 重置手动跳转标记，确保下次也能正常循环
-                self.user_manual_skip = False
-            elif self.play_mode == 2:  # 随机播放模式
-                # 歌曲自然播放结束时，随机播放下一首
-                self.play_random_song()
-                self.player.play()
+    # playlist_position_changed 和 media_status_changed 已移除
+    # 使用 update_current_song_display 和 on_song_finished 代替
 
     def format_time(self, ms):
         """格式化时间"""
@@ -1349,100 +1379,76 @@ class MusicPlayer(QMainWindow):
             self.show_window()
 
     def show_window(self):
-        """显示窗口"""
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        """切换窗口显示/隐藏（最大化或隐藏）"""
+        if self.isVisible() and not self.isMinimized():
+            # 窗口可见，隐藏到托盘
+            self.hide()
+        else:
+            # 窗口隐藏或最小化，显示并最大化
+            self.show()
+            self.setWindowState(Qt.WindowMaximized)
+            self.raise_()
+            self.activateWindow()
 
     def closeEvent(self, event):
         """关闭事件"""
-        if self.tray_icon.isVisible():
+        if self.tray_icon and self.tray_icon.isVisible():
             self.hide()
             event.ignore()
+        else:
+            self.quit_application()
+            event.accept()
 
     def save_playlist(self):
         """保存当前播放列表"""
         if self.song_list:
             # 保存完整的歌曲信息（包括自定义名称）
             self.settings.setValue("playlist_full", self.song_list)
-            
+
             # 保存当前播放位置
-            current_index = self.playlist.currentIndex()
-            self.settings.setValue("current_index", current_index)
-            
+            self.settings.setValue("current_index", self.current_index)
+
             # 保存播放模式
             self.settings.setValue("play_mode", self.play_mode)
-            
-            # 保存音量
+
             self.settings.setValue("volume", self.volume)
-            
-            print(f"已保存播放列表，共{len(self.song_list)}首歌曲")
 
     def load_last_playlist(self):
         """加载上次的播放列表"""
-        # 尝试加载完整的播放列表信息
         saved_songs = self.settings.value("playlist_full", [])
-        
+
         if saved_songs and isinstance(saved_songs, list):
-            # 过滤存在的文件并恢复信息
             existing_songs = []
             for song_info in saved_songs:
                 if isinstance(song_info, dict) and 'path' in song_info:
                     if os.path.exists(song_info['path']):
                         existing_songs.append(song_info)
-                    else:
-                        print(f"文件不存在，跳过: {song_info['path']}")
-            
+
             if existing_songs:
-                # 直接设置歌曲列表
                 self.song_list = existing_songs
-                
-                # 重建播放列表和UI
                 for song_info in existing_songs:
-                    # 添加到播放列表
-                    self.playlist.addMedia(QMediaContent(QUrl.fromLocalFile(song_info['path'])))
-                    
-                    # 添加到UI列表
                     display_text = song_info.get('display_name', f"{song_info['title']} - {song_info['artist']}")
                     item = QListWidgetItem(display_text)
                     self.playlist_widget.addItem(item)
-                
-                # 恢复播放位置
+
                 current_index = self.settings.value("current_index", 0, type=int)
-                if 0 <= current_index < self.playlist.mediaCount():
-                    self.playlist.setCurrentIndex(current_index)
-                
-                # 恢复播放模式
+                if 0 <= current_index < len(self.song_list):
+                    self.current_index = current_index
+
                 play_mode = self.settings.value("play_mode", 0, type=int)
                 if 0 <= play_mode <= 2:
                     self.mode_combo.setCurrentIndex(play_mode)
-                
-                # 恢复音量
+
                 volume = self.settings.value("volume", 70, type=int)
                 if 0 <= volume <= 100:
                     self.volume_slider.setValue(volume)
-                
-                print(f"已加载上次播放列表，共{len(existing_songs)}首歌曲")
-            else:
-                print("上次播放列表中的文件都不存在")
+                    pygame.mixer.music.set_volume(volume / 100.0)
         else:
-            # 尝试加载旧格式的播放列表（仅路径）
             song_paths = self.settings.value("playlist", [])
             if song_paths and isinstance(song_paths, list):
-                existing_paths = []
-                for path in song_paths:
-                    if os.path.exists(path):
-                        existing_paths.append(path)
-                    else:
-                        print(f"文件不存在，跳过: {path}")
-                
+                existing_paths = [p for p in song_paths if os.path.exists(p)]
                 if existing_paths:
                     self.add_files_to_playlist(existing_paths)
-                    print(f"已加载旧格式播放列表，共{len(existing_paths)}首歌曲")
-                else:
-                    print("上次播放列表中的文件都不存在")
-            else:
-                print("没有找到上次的播放列表")
 
     def filter_playlist(self):
         """过滤播放列表"""
@@ -1482,15 +1488,12 @@ class MusicPlayer(QMainWindow):
     
     def locate_current_song(self):
         """定位到正在播放的歌曲"""
-        # 获取当前播放的歌曲索引
-        current_index = self.playlist.currentIndex()
-        
-        if current_index >= 0 and current_index < self.playlist_widget.count():
+        if self.current_index >= 0 and self.current_index < self.playlist_widget.count():
             # 清除搜索框，显示所有歌曲
             self.clear_search()
-            
+
             # 选中并滚动到当前播放的歌曲
-            current_item = self.playlist_widget.item(current_index)
+            current_item = self.playlist_widget.item(self.current_index)
             if current_item:
                 self.playlist_widget.setCurrentItem(current_item)
                 self.playlist_widget.scrollToItem(current_item, QListWidget.PositionAtCenter)
@@ -1517,18 +1520,16 @@ class MusicPlayer(QMainWindow):
     
     def smart_next_song(self):
         """智能下一曲 - 在智能单曲循环模式下使用"""
-        if self.playlist.mediaCount() > 0:
-            current_index = self.playlist.currentIndex()
+        if len(self.song_list) > 0:
             # 将当前播放的歌曲加入历史记录
-            if current_index >= 0:
-                self.add_to_history(current_index)
-            
-            random_index = random.randint(0, self.playlist.mediaCount() - 1)
+            if self.current_index >= 0:
+                self.add_to_history(self.current_index)
+
+            random_index = random.randint(0, len(self.song_list) - 1)
             # 避免选择相同的歌曲
-            while random_index == current_index and self.playlist.mediaCount() > 1:
-                random_index = random.randint(0, self.playlist.mediaCount() - 1)
-            self.playlist.setCurrentIndex(random_index)
-            self.player.play()
+            while random_index == self.current_index and len(self.song_list) > 1:
+                random_index = random.randint(0, len(self.song_list) - 1)
+            self.play_song_at_index(random_index)
 
     def rename_current_item(self):
         """重命名当前选中的项目"""
@@ -1588,15 +1589,15 @@ class MusicPlayer(QMainWindow):
         if ok and new_name.strip():
             # 更新列表项显示
             item.setText(new_name.strip())
-            
+
             # 更新歌曲信息中的标题
             song_info = self.song_list[item_index]
             song_info['display_name'] = new_name.strip()
-            
+
             # 如果是当前播放的歌曲，更新显示
-            if self.playlist.currentIndex() == item_index:
+            if self.current_index == item_index:
                 self.current_song_label.setText(new_name.strip())
-            
+
             # 保存播放列表
             self.save_playlist()
 
@@ -1606,20 +1607,25 @@ class MusicPlayer(QMainWindow):
             self, "确认删除", "确定要从播放列表中删除这首歌曲吗？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
-        
+
         if reply == QMessageBox.Yes:
             item_index = self.playlist_widget.row(item)
             if item_index >= 0:
                 # 从UI列表中删除
                 self.playlist_widget.takeItem(item_index)
-                
-                # 从播放列表中删除
-                self.playlist.removeMedia(item_index)
-                
+
                 # 从歌曲信息列表中删除
                 if item_index < len(self.song_list):
                     del self.song_list[item_index]
-                
+
+                # 如果删除的是当前播放的歌曲，调整索引
+                if item_index == self.current_index:
+                    pygame.mixer.music.stop()
+                    self.is_playing = False
+                    self.current_index = -1
+                elif item_index < self.current_index:
+                    self.current_index -= 1
+
                 # 保存播放列表
                 self.save_playlist()
 
@@ -1670,12 +1676,12 @@ class MusicPlayer(QMainWindow):
             QMessageBox.warning(self, "错误", "全局快捷键功能不可用")
             return
         
-        # 默认的快捷键组合
+        # 默认的快捷键组合（使用 Ctrl+Alt+Shift，避免冲突）
         default_hotkeys = {
-            'show_window': "Ctrl+Alt+M",
-            'toggle_play': "Ctrl+Alt+P", 
-            'previous_song': "Ctrl+Alt+Left",
-            'next_song': "Ctrl+Alt+Right"
+            'show_window': "Ctrl+Alt+Shift+M",
+            'toggle_play': "Ctrl+Alt+Shift+P",
+            'previous_song': "Ctrl+Alt+Shift+Left",
+            'next_song': "Ctrl+Alt+Shift+Right"
         }
         
         # 更新进程中的快捷键
@@ -1687,46 +1693,21 @@ class MusicPlayer(QMainWindow):
         self.settings.setValue("global_prev_key", default_hotkeys['previous_song'])
         self.settings.setValue("global_next_key", default_hotkeys['next_song'])
         
-        QMessageBox.information(self, "重置成功", 
-            f"全局快捷键已重置为推荐设置:\n"
+        QMessageBox.information(self, "重置成功",
+            f"全局快捷键已重置为默认设置:\n"
             f"显示窗口: {default_hotkeys['show_window']}\n"
             f"播放/暂停: {default_hotkeys['toggle_play']}\n"
             f"上一曲: {default_hotkeys['previous_song']}\n"
             f"下一曲: {default_hotkeys['next_song']}\n\n"
-            f"推荐设置避免了与系统快捷键的冲突。")
+            f"使用 Ctrl+Alt+Shift 三键组合可最大程度避免冲突。")
     
     def check_hotkey_conflicts(self):
         """检查快捷键冲突并提供解决方案"""
         # 此方法现在由独立进程处理，主窗口不需要特别处理
         pass
 
-    def monitor_audio_status(self):
-        """监控音频状态，处理蓝牙连接问题"""
-        if self.player.state() == QMediaPlayer.PlayingState:
-            # 检查音频是否正常播放
-            current_pos = self.player.position()
-            if hasattr(self, 'last_position') and current_pos == self.last_position:
-                # 位置没有变化，可能是蓝牙连接问题
-                print("检测到音频可能卡顿，尝试重新设置音频...")
-                self.restart_audio_if_needed()
-            self.last_position = current_pos
-    
-    def restart_audio_if_needed(self):
-        """在检测到音频问题时重新启动音频"""
-        if self.player.state() == QMediaPlayer.PlayingState:
-            current_pos = self.player.position()
-            current_media = self.player.media()
-            
-            # 暂停并重新播放
-            self.player.pause()
-            QTimer.singleShot(100, lambda: self.resume_audio(current_pos, current_media))
-    
-    def resume_audio(self, position, media):
-        """恢复音频播放"""
-        self.player.setMedia(media)
-        self.player.setPosition(position)
-        self.player.play()
-    
+    # monitor_audio_status, restart_audio_if_needed, resume_audio 已移除（使用 pygame 后不需要）
+
     def show_audio_device_settings(self):
         """显示音频设备设置对话框"""
         msg = QMessageBox(self)
@@ -1765,45 +1746,61 @@ class MusicPlayer(QMainWindow):
         # 停止全局快捷键进程
         if self.global_hotkey_process:
             self.global_hotkey_process.stop()
-        
+
         # 停止事件监听定时器
         if hasattr(self, 'hotkey_event_timer'):
             self.hotkey_event_timer.stop()
-        
-        # 停止音频监控定时器
-        if hasattr(self, 'audio_monitor_timer'):
-            self.audio_monitor_timer.stop()
-        
+
+        # 停止 pygame
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+        except:
+            pass
+
         # 保存当前播放列表
         self.save_playlist()
-        self.tray_icon.hide()
+
+        # 隐藏系统托盘图标
+        if self.tray_icon:
+            self.tray_icon.hide()
+
         QApplication.quit()
 
 
 def main():
-    # 强制使用WMF后端，尝试解决蓝牙耳机播放问题
-    os.environ['QT_MULTIMEDIA_PREFERRED_PLUGINS'] = 'windowsmediafoundation'
-    
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)  # 关闭最后一个窗口时不退出程序
-    
-    # 设置应用程序图标（用于任务栏）
-    def get_resource_path(relative_path):
-        """获取资源文件路径，支持PyInstaller打包"""
-        try:
-            # PyInstaller创建临时文件夹，将路径存储在_MEIPASS中
-            base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
-        return os.path.join(base_path, relative_path)
-    
-    icon_path = get_resource_path("1024x1024.png")
-    app.setWindowIcon(QIcon(icon_path))
-    
-    player = MusicPlayer()
-    player.show()
-    
-    sys.exit(app.exec_())
+    # 不再强制使用WMF后端（可能导致某些文件无法播放）
+    # os.environ['QT_MULTIMEDIA_PREFERRED_PLUGINS'] = 'windowsmediafoundation'
+    # 抑制 Qt 视频相关的警告信息
+    os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.multimedia.*=false'
+
+    try:
+        app = QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(False)
+
+        # 设置应用程序图标
+        def get_resource_path(relative_path):
+            try:
+                base_path = sys._MEIPASS
+            except Exception:
+                base_path = os.path.abspath(".")
+            return os.path.join(base_path, relative_path)
+
+        icon_path = get_resource_path("1024x1024.png")
+        app.setWindowIcon(QIcon(icon_path))
+
+        player = MusicPlayer()
+        player.show()
+
+        # 保持player引用，防止被垃圾回收
+        app.player = player
+
+        sys.exit(app.exec_())
+    except Exception as e:
+        print(f"程序错误: {e}")
+        import traceback
+        traceback.print_exc()
+        input("按回车键退出...")
 
 
 if __name__ == "__main__":
