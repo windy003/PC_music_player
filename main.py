@@ -579,6 +579,7 @@ class MusicPlayer(QMainWindow):
         self.volume = 70
         self.current_index = -1  # 当前播放的歌曲索引
         self.music_loaded = False  # 标记是否已加载音乐文件
+        self.seek_offset = 0  # 跳转偏移量，用于修正 pygame.mixer.music.get_pos()
 
         # 设置初始音量 (pygame 音量范围 0.0-1.0)
         pygame.mixer.music.set_volume(self.volume / 100.0)
@@ -1053,6 +1054,7 @@ class MusicPlayer(QMainWindow):
 
         # 重置播放状态
         self.current_position = 0
+        self.seek_offset = 0
         self.duration = 0
         self.is_playing = False
         self.current_index = -1
@@ -1152,6 +1154,7 @@ class MusicPlayer(QMainWindow):
                 self.current_index = index
                 self.is_playing = True
                 self.current_position = 0
+                self.seek_offset = 0  # 重置跳转偏移量
                 self.duration = song_info.get('duration', 0) * 1000
                 self.update_current_song_display()
                 self.play_btn.setText("暂停 (Alt+P/空格)")
@@ -1296,8 +1299,10 @@ class MusicPlayer(QMainWindow):
         """跳转到指定位置（毫秒）"""
         if self.current_index >= 0:
             try:
-                # pygame.mixer.music.set_pos 使用秒为单位
+                # pygame.mixer.music.play(start=) 使用秒为单位
                 pygame.mixer.music.play(start=position_ms / 1000.0)
+                # 设置跳转偏移量，因为 get_pos() 会从 0 开始计算
+                self.seek_offset = position_ms
                 self.current_position = position_ms
             except Exception as e:
                 print(f"跳转失败: {e}")
@@ -1326,15 +1331,18 @@ class MusicPlayer(QMainWindow):
         if self.is_playing:
             # 使用 pygame 获取当前播放位置
             try:
-                pos = pygame.mixer.music.get_pos()  # 返回毫秒
-                if pos >= 0:
-                    self.current_position = pos
-                    self.progress_slider.setValue(pos)
-                    self.time_label.setText(self.format_time(pos))
+                # 先检查歌曲是否播放结束
+                if not pygame.mixer.music.get_busy():
+                    self.on_song_finished()
+                    return
 
-                    # 检查歌曲是否播放结束
-                    if not pygame.mixer.music.get_busy() and self.is_playing:
-                        self.on_song_finished()
+                pos = pygame.mixer.music.get_pos()  # 返回毫秒（从当前play()调用开始）
+                if pos >= 0:
+                    # 加上跳转偏移量得到实际位置
+                    actual_pos = pos + self.seek_offset
+                    self.current_position = actual_pos
+                    self.progress_slider.setValue(actual_pos)
+                    self.time_label.setText(self.format_time(actual_pos))
             except:
                 pass
 
