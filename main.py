@@ -810,7 +810,14 @@ class MusicPlayer(QMainWindow):
         search_layout.addWidget(clear_search_btn)
         
         left_layout.addLayout(search_layout)
-        
+
+        # 当前文件夹标签
+        self.folder_label = QLabel("")
+        self.folder_label.setStyleSheet("color: #4a90d9; font-size: 18px; padding: 2px 4px;")
+        self.folder_label.setAlignment(Qt.AlignLeft)
+        self.folder_label.setVisible(False)
+        left_layout.addWidget(self.folder_label)
+
         # 播放列表
         self.playlist_widget = PlaylistWidget(self) # Pass self as parent
         self.playlist_widget.itemDoubleClicked.connect(self.play_selected_song)
@@ -1027,16 +1034,20 @@ class MusicPlayer(QMainWindow):
         if folder_path:
             audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
             file_paths = []
-            
+
             for root, dirs, files in os.walk(folder_path):
                 for file in files:
                     if any(file.lower().endswith(ext) for ext in audio_extensions):
                         file_paths.append(os.path.join(root, file))
-            
+
             if file_paths:
                 # 清空旧的播放列表
                 self.clear_playlist()
                 self.add_files_to_playlist(file_paths)
+                # 显示文件夹名
+                folder_name = os.path.basename(folder_path)
+                self.folder_label.setText(f"文件夹: {folder_name}")
+                self.folder_label.setVisible(True)
                 # 保存播放列表
                 self.save_playlist()
             else:
@@ -1066,6 +1077,8 @@ class MusicPlayer(QMainWindow):
         self.time_label.setText("00:00")
         self.total_time_label.setText("00:00")
         self.play_btn.setText("播放 (Alt+P/空格)")
+        self.folder_label.setText("")
+        self.folder_label.setVisible(False)
 
     def clear_playlist_and_settings(self):
         """清空播放列表并删除保存的设置"""
@@ -1076,6 +1089,7 @@ class MusicPlayer(QMainWindow):
         self.settings.remove("playlist_full")
         self.settings.remove("playlist")
         self.settings.remove("current_index")
+        self.settings.remove("folder_label")
 
 
     def add_files_to_playlist(self, file_paths):
@@ -1421,6 +1435,10 @@ class MusicPlayer(QMainWindow):
 
             self.settings.setValue("volume", self.volume)
 
+            # 保存当前文件夹名
+            folder_name = self.folder_label.text()
+            self.settings.setValue("folder_label", folder_name)
+
     def load_last_playlist(self):
         """加载上次的播放列表"""
         saved_songs = self.settings.value("playlist_full", [])
@@ -1451,6 +1469,11 @@ class MusicPlayer(QMainWindow):
                 if 0 <= volume <= 100:
                     self.volume_slider.setValue(volume)
                     pygame.mixer.music.set_volume(volume / 100.0)
+
+                folder_name = self.settings.value("folder_label", "")
+                if folder_name:
+                    self.folder_label.setText(folder_name)
+                    self.folder_label.setVisible(True)
         else:
             song_paths = self.settings.value("playlist", [])
             if song_paths and isinstance(song_paths, list):
