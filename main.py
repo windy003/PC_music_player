@@ -350,12 +350,14 @@ class GlobalHotkeyProcess:
 
 # 自定义按键捕获输入框
 class HotkeyLineEdit(QLineEdit):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, allow_no_modifiers=False):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setPlaceholderText("点击此处并按下快捷键...")
         self.current_keys = []
-        
+        # 是否允许无修饰键的快捷键（本地快捷键允许，全局快捷键通常需要修饰键）
+        self.allow_no_modifiers = allow_no_modifiers
+
     def keyPressEvent(self, event):
         # 记录按下的键
         modifiers = []
@@ -367,11 +369,11 @@ class HotkeyLineEdit(QLineEdit):
             modifiers.append("Shift")
         if event.modifiers() & Qt.MetaModifier:
             modifiers.append("Win")
-            
+
         # 获取主键
         key_text = ""
         key = event.key()
-        
+
         if Qt.Key_A <= key <= Qt.Key_Z:
             key_text = chr(key)
         elif Qt.Key_0 <= key <= Qt.Key_9:
@@ -384,36 +386,39 @@ class HotkeyLineEdit(QLineEdit):
             key_text = "Left"
         elif key == Qt.Key_Right:
             key_text = "Right"
-        elif key == Qt.Key_F1:
-            key_text = "F1"
-        elif key == Qt.Key_F2:
-            key_text = "F2"
-        elif key == Qt.Key_F3:
-            key_text = "F3"
-        elif key == Qt.Key_F4:
-            key_text = "F4"
-        elif key == Qt.Key_F5:
-            key_text = "F5"
-        elif key == Qt.Key_F6:
-            key_text = "F6"
-        elif key == Qt.Key_F7:
-            key_text = "F7"
-        elif key == Qt.Key_F8:
-            key_text = "F8"
-        elif key == Qt.Key_F9:
-            key_text = "F9"
-        elif key == Qt.Key_F10:
-            key_text = "F10"
-        elif key == Qt.Key_F11:
-            key_text = "F11"
-        elif key == Qt.Key_F12:
-            key_text = "F12"
-        
+        elif key == Qt.Key_Up:
+            key_text = "Up"
+        elif key == Qt.Key_Down:
+            key_text = "Down"
+        elif key == Qt.Key_Delete:
+            key_text = "Delete"
+        elif key == Qt.Key_Backspace:
+            key_text = "Backspace"
+        elif key == Qt.Key_Tab:
+            key_text = "Tab"
+        elif key == Qt.Key_Escape:
+            key_text = "Escape"
+        elif key == Qt.Key_Home:
+            key_text = "Home"
+        elif key == Qt.Key_End:
+            key_text = "End"
+        elif key == Qt.Key_PageUp:
+            key_text = "PgUp"
+        elif key == Qt.Key_PageDown:
+            key_text = "PgDown"
+        elif key == Qt.Key_Insert:
+            key_text = "Ins"
+        elif Qt.Key_F1 <= key <= Qt.Key_F12:
+            key_text = "F" + str(key - Qt.Key_F1 + 1)
+
         # 如果有有效的主键，组合快捷键字符串
-        if key_text and modifiers:
-            hotkey_str = "+".join(modifiers + [key_text])
-            self.setText(hotkey_str)
-        
+        if key_text:
+            if modifiers:
+                hotkey_str = "+".join(modifiers + [key_text])
+                self.setText(hotkey_str)
+            elif self.allow_no_modifiers:
+                self.setText(key_text)
+
         # 不调用父类的keyPressEvent，防止默认处理
 
 
@@ -514,9 +519,9 @@ class GlobalHotkeyDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
-        
+
         self.setLayout(layout)
-    
+
     def accept(self):
         self.show_key = self.show_key_edit.text().strip()
         self.play_key = self.play_key_edit.text().strip()
@@ -526,7 +531,99 @@ class GlobalHotkeyDialog(QDialog):
         if not self.show_key or not self.play_key or not self.prev_key or not self.next_key:
             QMessageBox.warning(self, "输入错误", "请设置完整的快捷键！")
             return
-        
+
+        super().accept()
+
+
+class LocalShortcutDialog(QDialog):
+    """本地快捷键自定义对话框（程序窗口聚焦时生效）"""
+
+    def __init__(self, definitions, current_values, parent=None):
+        """
+        :param definitions: list of (key, label, default, callback_name)
+        :param current_values: dict {key: hotkey_str}
+        """
+        super().__init__(parent)
+        self.setWindowTitle("本地快捷键设置")
+        self.setModal(True)
+        self.resize(480, 600)
+
+        if parent:
+            self.setWindowIcon(parent.windowIcon())
+
+        self.definitions = definitions
+        self.edits = {}  # key -> HotkeyLineEdit
+
+        layout = QVBoxLayout()
+
+        info_label = QLabel("设置本地快捷键（仅在程序窗口聚焦时生效）：")
+        info_label.setStyleSheet("font-weight: bold; margin-bottom: 6px;")
+        layout.addWidget(info_label)
+
+        # 用 QScrollArea 包住表单，条目较多时可滚动
+        from PyQt5.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        form_container = QWidget()
+        form_layout = QFormLayout()
+        form_container.setLayout(form_layout)
+
+        for key, label, default, _callback in definitions:
+            edit = HotkeyLineEdit(allow_no_modifiers=True)
+            edit.setText(current_values.get(key, default))
+            self.edits[key] = edit
+            form_layout.addRow(label + ":", edit)
+
+        scroll.setWidget(form_container)
+        layout.addWidget(scroll)
+
+        # 帮助说明
+        help_label = QLabel(
+            "使用方法:\n"
+            "1. 点击输入框\n"
+            "2. 按下想要设置的快捷键（可单键或组合键）\n\n"
+            "支持的修饰键: Ctrl, Alt, Shift, Win\n"
+            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter, Left, Right,\n"
+            "            Up, Down, Delete, Backspace, Tab, Escape, Home, End,\n"
+            "            PgUp, PgDown, Ins"
+        )
+        help_label.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(help_label)
+
+        # 按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def get_values(self):
+        """返回 {key: hotkey_str}"""
+        return {key: edit.text().strip() for key, edit in self.edits.items()}
+
+    def accept(self):
+        values = self.get_values()
+
+        # 校验：不能为空
+        empty = [key for key, v in values.items() if not v]
+        if empty:
+            QMessageBox.warning(self, "输入错误", "请设置完整的快捷键，不能有空项！")
+            return
+
+        # 校验：不能重复
+        seen = {}
+        for key, v in values.items():
+            if v in seen:
+                QMessageBox.warning(
+                    self, "快捷键冲突",
+                    f"快捷键 \"{v}\" 被重复使用，请修改后再保存。"
+                )
+                return
+            seen[v] = key
+
+        self.values = values
         super().accept()
 
 
@@ -760,17 +857,18 @@ class MusicPlayer(QMainWindow):
         self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)\n智能单曲循环: 自然播放结束时循环，手动切换时随机跳转")
         top_layout.addWidget(self.mode_combo)
         
+        # 本地快捷键设置按钮（程序窗口聚焦时生效）
+        self.local_shortcut_btn = QPushButton("本地快捷键设置")
+        self.local_shortcut_btn.clicked.connect(self.show_local_shortcut_settings)
+        self.local_shortcut_btn.setToolTip("自定义程序窗口聚焦时使用的快捷键")
+        top_layout.addWidget(self.local_shortcut_btn)
+
         # 全局快捷键设置按钮
         if GLOBAL_HOTKEY_AVAILABLE:
             self.global_hotkey_btn = QPushButton("全局快捷键设置")
             self.global_hotkey_btn.clicked.connect(self.show_global_hotkey_settings)
+            self.global_hotkey_btn.setToolTip("自定义程序后台运行时也可用的快捷键")
             top_layout.addWidget(self.global_hotkey_btn)
-            
-            # 重置全局快捷键按钮
-            self.reset_hotkey_btn = QPushButton("重置快捷键")
-            self.reset_hotkey_btn.clicked.connect(self.reset_global_hotkeys)
-            self.reset_hotkey_btn.setToolTip("重置全局快捷键为默认设置\n默认设置: Ctrl+Alt+M/P/Left/Right")
-            top_layout.addWidget(self.reset_hotkey_btn)
         
         # 音频设备选择按钮
         self.audio_device_btn = QPushButton("音频设备设置")
@@ -938,75 +1036,70 @@ class MusicPlayer(QMainWindow):
         except Exception:
             self.tray_icon = None
 
+    # 本地快捷键定义表：(key, 显示标签, 默认快捷键, 回调方法名)
+    # 修改默认值或新增条目时只需改这里
+    LOCAL_SHORTCUT_DEFINITIONS = [
+        ("open_file",         "打开文件",           "Alt+O",     "open_file"),
+        ("open_folder",       "打开文件夹",         "Alt+F",     "open_folder"),
+        ("toggle_play",       "播放/暂停",         "Alt+P",     "toggle_play"),
+        ("previous_song",     "上一曲",            "Alt+Left",  "previous_song"),
+        ("next_song",         "下一曲(智能)",      "Alt+Right", "smart_next_shortcut"),
+        ("cycle_play_mode",   "切换播放模式",       "Alt+M",     "cycle_play_mode"),
+        ("show_mode_dropdown","展开播放模式下拉",   "Alt+L",     "show_mode_dropdown"),
+        ("volume_up",         "音量增加",           "Alt+Up",    "volume_up"),
+        ("volume_down",       "音量减少",           "Alt+Down",  "volume_down"),
+        ("toggle_play_space", "播放/暂停(空格)",   "Space",     "toggle_play"),
+        ("seek_backward",     "后退5秒",           "Left",      "seek_backward"),
+        ("seek_forward",      "前进5秒",           "Right",     "seek_forward"),
+        ("focus_search",      "聚焦搜索框",         "Alt+D",     "focus_search_box"),
+        ("clear_search",      "清除搜索",           "Alt+C",     "clear_search"),
+        ("locate_current",    "定位当前歌曲",       "Alt+G",     "locate_current_song"),
+        ("rename",            "重命名选中项",       "Ctrl+R",    "rename_current_item"),
+        ("delete",            "删除选中项",         "Delete",    "delete_current_item"),
+    ]
+
+    def _load_local_shortcut_values(self):
+        """从 QSettings 读取本地快捷键设置，没有则用默认值"""
+        values = {}
+        for key, _label, default, _callback in self.LOCAL_SHORTCUT_DEFINITIONS:
+            values[key] = self.settings.value(f"local_shortcut_{key}", default, type=str)
+        return values
+
     def init_shortcuts(self):
-        """初始化快捷键"""
-        # Alt+O: 打开文件
-        self.open_file_shortcut = QShortcut(QKeySequence("Alt+O"), self)
-        self.open_file_shortcut.activated.connect(self.open_file)
-        
-        # Alt+F: 打开文件夹
-        self.open_folder_shortcut = QShortcut(QKeySequence("Alt+F"), self)
-        self.open_folder_shortcut.activated.connect(self.open_folder)
-        
-        # Alt+P: 播放/暂停
-        self.play_shortcut = QShortcut(QKeySequence("Alt+P"), self)
-        self.play_shortcut.activated.connect(self.toggle_play)
-        
-        # Alt+Left: 上一曲
-        self.prev_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
-        self.prev_shortcut.activated.connect(self.previous_song)
-        
-        # Alt+Right: 智能下一曲（统一处理）
-        self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
-        self.next_shortcut.activated.connect(self.smart_next_shortcut)
-        
-        # Alt+M: 切换播放模式
-        self.mode_shortcut = QShortcut(QKeySequence("Alt+M"), self)
-        self.mode_shortcut.activated.connect(self.cycle_play_mode)
-        
-        # Alt+L: 打开播放模式下拉菜单
-        self.mode_dropdown_shortcut = QShortcut(QKeySequence("Alt+L"), self)
-        self.mode_dropdown_shortcut.activated.connect(self.show_mode_dropdown)
-        
-        # Alt+Up: 音量增加
-        self.volume_up_shortcut = QShortcut(QKeySequence("Alt+Up"), self)
-        self.volume_up_shortcut.activated.connect(self.volume_up)
-        
-        # Alt+Down: 音量减少
-        self.volume_down_shortcut = QShortcut(QKeySequence("Alt+Down"), self)
-        self.volume_down_shortcut.activated.connect(self.volume_down)
-        
-        # 空格键: 播放/暂停
-        self.space_shortcut = QShortcut(QKeySequence("Space"), self)
-        self.space_shortcut.activated.connect(self.toggle_play)
-        
-        # 左方向键: 后退5秒
-        self.left_shortcut = QShortcut(QKeySequence("Left"), self)
-        self.left_shortcut.activated.connect(self.seek_backward)
-        
-        # 右方向键: 前进5秒
-        self.right_shortcut = QShortcut(QKeySequence("Right"), self)
-        self.right_shortcut.activated.connect(self.seek_forward)
-        
-        # Alt+D: 聚焦搜索框
-        self.search_shortcut = QShortcut(QKeySequence("Alt+D"), self)
-        self.search_shortcut.activated.connect(self.focus_search_box)
-        
-        # Alt+C: 清除搜索
-        self.clear_search_shortcut = QShortcut(QKeySequence("Alt+C"), self)
-        self.clear_search_shortcut.activated.connect(self.clear_search)
-        
-        # Alt+G: 定位到正在播放的歌曲
-        self.locate_shortcut = QShortcut(QKeySequence("Alt+G"), self)
-        self.locate_shortcut.activated.connect(self.locate_current_song)
-        
-        # Ctrl+R: 重命名选中项
-        self.rename_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
-        self.rename_shortcut.activated.connect(self.rename_current_item)
-        
-        # Delete: 删除选中项
-        self.delete_shortcut = QShortcut(QKeySequence("Delete"), self)
-        self.delete_shortcut.activated.connect(self.delete_current_item)
+        """初始化本地快捷键（基于定义表 + QSettings）"""
+        # 存放所有 QShortcut 对象，便于后续修改/重置
+        self.local_shortcuts = {}
+        values = self._load_local_shortcut_values()
+
+        for key, _label, _default, callback_name in self.LOCAL_SHORTCUT_DEFINITIONS:
+            hotkey_str = values[key]
+            shortcut = QShortcut(QKeySequence(hotkey_str), self)
+            callback = getattr(self, callback_name, None)
+            if callback:
+                shortcut.activated.connect(callback)
+            self.local_shortcuts[key] = shortcut
+
+    def apply_local_shortcuts(self, values):
+        """根据新值更新所有本地快捷键的按键序列"""
+        for key, _label, _default, _callback in self.LOCAL_SHORTCUT_DEFINITIONS:
+            shortcut = self.local_shortcuts.get(key)
+            if shortcut and key in values:
+                shortcut.setKey(QKeySequence(values[key]))
+
+    def show_local_shortcut_settings(self):
+        """显示本地快捷键设置对话框"""
+        current_values = {
+            key: self.local_shortcuts[key].key().toString()
+            for key, _l, _d, _c in self.LOCAL_SHORTCUT_DEFINITIONS
+        }
+        dialog = LocalShortcutDialog(self.LOCAL_SHORTCUT_DEFINITIONS, current_values, self)
+        if dialog.exec_() == QDialog.Accepted:
+            new_values = dialog.values
+            self.apply_local_shortcuts(new_values)
+            # 持久化
+            for key, v in new_values.items():
+                self.settings.setValue(f"local_shortcut_{key}", v)
+            QMessageBox.information(self, "设置成功", "本地快捷键已更新。")
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -1700,37 +1793,6 @@ class MusicPlayer(QMainWindow):
                 f"播放/暂停: {new_hotkeys['toggle_play']}\n"
                 f"上一曲: {new_hotkeys['previous_song']}\n"
                 f"下一曲: {new_hotkeys['next_song']}")
-    
-    def reset_global_hotkeys(self):
-        """重置全局快捷键为默认设置"""
-        if not self.global_hotkey_process:
-            QMessageBox.warning(self, "错误", "全局快捷键功能不可用")
-            return
-        
-        # 默认的快捷键组合（使用 Ctrl+Alt+Shift，避免冲突）
-        default_hotkeys = {
-            'show_window': "Ctrl+Alt+Shift+M",
-            'toggle_play': "Ctrl+Alt+Shift+P",
-            'previous_song': "Ctrl+Alt+Shift+Left",
-            'next_song': "Ctrl+Alt+Shift+Right"
-        }
-        
-        # 更新进程中的快捷键
-        self.global_hotkey_process.update_hotkeys(default_hotkeys)
-        
-        # 保存设置
-        self.settings.setValue("global_show_key", default_hotkeys['show_window'])
-        self.settings.setValue("global_play_key", default_hotkeys['toggle_play'])
-        self.settings.setValue("global_prev_key", default_hotkeys['previous_song'])
-        self.settings.setValue("global_next_key", default_hotkeys['next_song'])
-        
-        QMessageBox.information(self, "重置成功",
-            f"全局快捷键已重置为默认设置:\n"
-            f"显示窗口: {default_hotkeys['show_window']}\n"
-            f"播放/暂停: {default_hotkeys['toggle_play']}\n"
-            f"上一曲: {default_hotkeys['previous_song']}\n"
-            f"下一曲: {default_hotkeys['next_song']}\n\n"
-            f"使用 Ctrl+Alt+Shift 三键组合可最大程度避免冲突。")
     
     def check_hotkey_conflicts(self):
         """检查快捷键冲突并提供解决方案"""
