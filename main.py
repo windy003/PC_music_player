@@ -182,14 +182,39 @@ class GlobalHotkeyProcess:
         registered_hotkeys = []
         running = True
         
+        # 命名按键到 Win32 虚拟键码的映射，必须与 HotkeyLineEdit 录入的字符串保持一致
+        named_keys = {
+            'space':     win32con.VK_SPACE,
+            'enter':     win32con.VK_RETURN,
+            'return':    win32con.VK_RETURN,
+            'left':      win32con.VK_LEFT,
+            'right':     win32con.VK_RIGHT,
+            'up':        win32con.VK_UP,
+            'down':      win32con.VK_DOWN,
+            'delete':    win32con.VK_DELETE,
+            'del':       win32con.VK_DELETE,
+            'backspace': win32con.VK_BACK,
+            'tab':       win32con.VK_TAB,
+            'escape':    win32con.VK_ESCAPE,
+            'esc':       win32con.VK_ESCAPE,
+            'home':      win32con.VK_HOME,
+            'end':       win32con.VK_END,
+            'pgup':      win32con.VK_PRIOR,
+            'pageup':    win32con.VK_PRIOR,
+            'pgdown':    win32con.VK_NEXT,
+            'pagedown':  win32con.VK_NEXT,
+            'ins':       win32con.VK_INSERT,
+            'insert':    win32con.VK_INSERT,
+        }
+
         def parse_hotkey(hotkey_str):
             """解析快捷键字符串"""
             if not hotkey_str:
                 return None
-            
+
             modifiers = 0
             key = 0
-            
+
             parts = hotkey_str.split('+')
             for part in parts:
                 part = part.strip().lower()
@@ -201,26 +226,20 @@ class GlobalHotkeyProcess:
                     modifiers |= win32con.MOD_SHIFT
                 elif part == 'win':
                     modifiers |= win32con.MOD_WIN
-                else:
-                    # 普通按键
-                    if len(part) == 1:
-                        key = ord(part.upper())
-                    elif part == 'space':
-                        key = win32con.VK_SPACE
-                    elif part == 'enter':
-                        key = win32con.VK_RETURN
-                    elif part == 'left':
-                        key = win32con.VK_LEFT
-                    elif part == 'right':
-                        key = win32con.VK_RIGHT
-                    elif part.startswith('f') and len(part) <= 3:
-                        try:
-                            f_num = int(part[1:])
-                            if 1 <= f_num <= 12:
-                                key = win32con.VK_F1 + f_num - 1
-                        except:
-                            pass
-            
+                elif len(part) == 1:
+                    # A-Z, 0-9
+                    key = ord(part.upper())
+                elif part in named_keys:
+                    key = named_keys[part]
+                elif part.startswith('f') and len(part) <= 3:
+                    # F1-F12
+                    try:
+                        f_num = int(part[1:])
+                        if 1 <= f_num <= 12:
+                            key = win32con.VK_F1 + f_num - 1
+                    except:
+                        pass
+
             return (modifiers, key) if key else None
         
         def register_hotkeys():
@@ -245,33 +264,46 @@ class GlobalHotkeyProcess:
             }
 
             success_count = 0
+            failed_items = []  # [(action, hotkey_str, reason), ...]
             for action, hotkey_str in hotkeys.items():
                 hotkey_id = hotkey_ids.get(action)
-                if hotkey_id:
-                    key_code = parse_hotkey(hotkey_str)
-                    if key_code:
-                        try:
-                            user32 = ctypes.windll.user32
-                            kernel32 = ctypes.windll.kernel32
-                            kernel32.SetLastError(0)
+                if not hotkey_id:
+                    continue
 
-                            result = user32.RegisterHotKey(
-                                None,
-                                hotkey_id,
-                                key_code[0],
-                                key_code[1]
-                            )
+                key_code = parse_hotkey(hotkey_str)
+                if not key_code:
+                    failed_items.append((action, hotkey_str, "无法解析按键"))
+                    continue
 
-                            if result:
-                                registered_hotkeys.append(hotkey_id)
-                                success_count += 1
-                        except Exception:
-                            pass
-            
-            # 通知主进程注册结果
-            if success_count < len(hotkeys):
-                failed_count = len(hotkeys) - success_count
-                event_queue.put(('hotkey_failed', failed_count))
+                try:
+                    user32 = ctypes.windll.user32
+                    kernel32 = ctypes.windll.kernel32
+                    kernel32.SetLastError(0)
+
+                    result = user32.RegisterHotKey(
+                        None,
+                        hotkey_id,
+                        key_code[0],
+                        key_code[1]
+                    )
+
+                    if result:
+                        registered_hotkeys.append(hotkey_id)
+                        success_count += 1
+                    else:
+                        # Windows 错误码 1409 = ERROR_HOTKEY_ALREADY_REGISTERED
+                        err = kernel32.GetLastError()
+                        if err == 1409:
+                            reason = "已被其他程序占用"
+                        else:
+                            reason = f"注册失败 (错误码 {err})"
+                        failed_items.append((action, hotkey_str, reason))
+                except Exception as e:
+                    failed_items.append((action, hotkey_str, f"异常: {e}"))
+
+            # 通知主进程注册结果（带失败的具体明细）
+            if failed_items:
+                event_queue.put(('hotkey_failed', failed_items))
             return success_count > 0
 
         try:
@@ -457,138 +489,98 @@ class PlaylistWidget(QListWidget):
         super().keyPressEvent(event)
 
 
-class GlobalHotkeyDialog(QDialog):
-    def __init__(self, current_show_key, current_play_key, current_prev_key, current_next_key, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("全局快捷键设置")
-        self.setModal(True)
-        self.resize(400, 350)
-        
-        # 设置图标
-        if parent:
-            self.setWindowIcon(parent.windowIcon())
-        
-        layout = QVBoxLayout()
-        
-        # 说明文字
-        info_label = QLabel("设置全局快捷键（在程序后台运行时也可使用）:")
-        info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
-        layout.addWidget(info_label)
-        
-        # 快捷键设置组
-        hotkey_group = QGroupBox("快捷键设置")
-        form_layout = QFormLayout()
-        
-        # 显示窗口快捷键
-        self.show_key_edit = HotkeyLineEdit()
-        self.show_key_edit.setText(current_show_key)
-        form_layout.addRow("显示窗口:", self.show_key_edit)
-        
-        # 播放/暂停快捷键
-        self.play_key_edit = HotkeyLineEdit()
-        self.play_key_edit.setText(current_play_key)
-        form_layout.addRow("播放/暂停:", self.play_key_edit)
-        
-        # 上一曲快捷键
-        self.prev_key_edit = HotkeyLineEdit()
-        self.prev_key_edit.setText(current_prev_key)
-        form_layout.addRow("上一曲:", self.prev_key_edit)
-        
-        # 下一曲快捷键
-        self.next_key_edit = HotkeyLineEdit()
-        self.next_key_edit.setText(current_next_key)
-        form_layout.addRow("下一曲:", self.next_key_edit)
-        
-        hotkey_group.setLayout(form_layout)
-        layout.addWidget(hotkey_group)
-        
-        # 说明文字
-        help_label = QLabel(
-            "使用方法:\n"
-            "1. 点击输入框\n"
-            "2. 按下想要设置的快捷键组合\n"
-            "3. 快捷键会自动显示在输入框中\n\n"
-            "支持的修饰键: Ctrl, Alt, Shift, Win\n"
-            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter, Left, Right"
-        )
-        help_label.setStyleSheet("color: gray; font-size: 10px;")
-        layout.addWidget(help_label)
-        
-        # 按钮
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+class ShortcutSettingsDialog(QDialog):
+    """统一的快捷键设置对话框，包含本地快捷键和全局快捷键两个分页"""
 
-        self.setLayout(layout)
-
-    def accept(self):
-        self.show_key = self.show_key_edit.text().strip()
-        self.play_key = self.play_key_edit.text().strip()
-        self.prev_key = self.prev_key_edit.text().strip()
-        self.next_key = self.next_key_edit.text().strip()
-        
-        if not self.show_key or not self.play_key or not self.prev_key or not self.next_key:
-            QMessageBox.warning(self, "输入错误", "请设置完整的快捷键！")
-            return
-
-        super().accept()
-
-
-class LocalShortcutDialog(QDialog):
-    """本地快捷键自定义对话框（程序窗口聚焦时生效）"""
-
-    def __init__(self, definitions, current_values, parent=None):
+    def __init__(self, local_definitions, current_local_values,
+                 global_definitions=None, current_global_values=None, parent=None):
         """
-        :param definitions: list of (key, label, default, callback_name)
-        :param current_values: dict {key: hotkey_str}
+        :param local_definitions: list of (key, label, default, callback_name)
+        :param current_local_values: dict {key: hotkey_str}
+        :param global_definitions: list of (key, label, default) 或 None
+        :param current_global_values: dict {key: hotkey_str} 或 None
         """
         super().__init__(parent)
-        self.setWindowTitle("本地快捷键设置")
+        self.setWindowTitle("快捷键设置")
         self.setModal(True)
-        self.resize(480, 600)
+        self.resize(520, 640)
 
         if parent:
             self.setWindowIcon(parent.windowIcon())
 
-        self.definitions = definitions
-        self.edits = {}  # key -> HotkeyLineEdit
+        self.local_definitions = local_definitions
+        self.global_definitions = global_definitions or []
+        self.local_edits = {}   # key -> HotkeyLineEdit
+        self.global_edits = {}  # key -> HotkeyLineEdit
+
+        # key -> 显示标签，用于在错误提示里指出具体是哪个动作冲突
+        self.local_labels = {key: label for key, label, _, _ in local_definitions}
+        self.global_labels = {key: label for key, label, _ in self.global_definitions}
+
+        from PyQt5.QtWidgets import QScrollArea, QTabWidget
 
         layout = QVBoxLayout()
 
-        info_label = QLabel("设置本地快捷键（仅在程序窗口聚焦时生效）：")
-        info_label.setStyleSheet("font-weight: bold; margin-bottom: 6px;")
-        layout.addWidget(info_label)
+        tab_widget = QTabWidget()
 
-        # 用 QScrollArea 包住表单，条目较多时可滚动
-        from PyQt5.QtWidgets import QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        # ========== 本地快捷键页 ==========
+        local_page = QWidget()
+        local_page_layout = QVBoxLayout()
+        local_page.setLayout(local_page_layout)
 
-        form_container = QWidget()
-        form_layout = QFormLayout()
-        form_container.setLayout(form_layout)
+        local_info = QLabel("仅在程序窗口聚焦时生效。")
+        local_info.setStyleSheet("color: gray; font-size: 11px; margin-bottom: 4px;")
+        local_page_layout.addWidget(local_info)
 
-        for key, label, default, _callback in definitions:
+        local_scroll = QScrollArea()
+        local_scroll.setWidgetResizable(True)
+        local_form_container = QWidget()
+        local_form_layout = QFormLayout()
+        local_form_container.setLayout(local_form_layout)
+
+        for key, label, default, _callback in local_definitions:
             edit = HotkeyLineEdit(allow_no_modifiers=True)
-            edit.setText(current_values.get(key, default))
-            self.edits[key] = edit
-            form_layout.addRow(label + ":", edit)
+            edit.setText(current_local_values.get(key, default))
+            self.local_edits[key] = edit
+            local_form_layout.addRow(label + ":", edit)
 
-        scroll.setWidget(form_container)
-        layout.addWidget(scroll)
+        local_scroll.setWidget(local_form_container)
+        local_page_layout.addWidget(local_scroll)
+
+        tab_widget.addTab(local_page, "本地快捷键")
+
+        # ========== 全局快捷键页 ==========
+        if self.global_definitions:
+            global_page = QWidget()
+            global_page_layout = QVBoxLayout()
+            global_page.setLayout(global_page_layout)
+
+            global_info = QLabel("程序在后台运行时也可使用，建议使用 Ctrl+Alt+Shift 三键组合避免冲突。")
+            global_info.setStyleSheet("color: gray; font-size: 11px; margin-bottom: 4px;")
+            global_info.setWordWrap(True)
+            global_page_layout.addWidget(global_info)
+
+            global_form_layout = QFormLayout()
+            for key, label, default in self.global_definitions:
+                edit = HotkeyLineEdit(allow_no_modifiers=False)
+                edit.setText((current_global_values or {}).get(key, default))
+                self.global_edits[key] = edit
+                global_form_layout.addRow(label + ":", edit)
+
+            global_page_layout.addLayout(global_form_layout)
+            global_page_layout.addStretch()
+
+            tab_widget.addTab(global_page, "全局快捷键")
+
+        layout.addWidget(tab_widget)
 
         # 帮助说明
         help_label = QLabel(
-            "使用方法:\n"
-            "1. 点击输入框\n"
-            "2. 按下想要设置的快捷键（可单键或组合键）\n\n"
-            "支持的修饰键: Ctrl, Alt, Shift, Win\n"
-            "支持的按键: A-Z, 0-9, F1-F12, Space, Enter, Left, Right,\n"
-            "            Up, Down, Delete, Backspace, Tab, Escape, Home, End,\n"
-            "            PgUp, PgDown, Ins"
+            "使用方法: 点击输入框，按下想要设置的快捷键。\n"
+            "本地快捷键支持单键，全局快捷键必须包含 Ctrl/Alt/Shift/Win 等修饰键。"
         )
         help_label.setStyleSheet("color: gray; font-size: 10px;")
+        help_label.setWordWrap(True)
         layout.addWidget(help_label)
 
         # 按钮
@@ -599,31 +591,52 @@ class LocalShortcutDialog(QDialog):
 
         self.setLayout(layout)
 
-    def get_values(self):
-        """返回 {key: hotkey_str}"""
-        return {key: edit.text().strip() for key, edit in self.edits.items()}
+    def _validate(self, edits, labels, group_name):
+        """校验单组（本地或全局）：不能为空，不能重复。
+        发现冲突时一次性列出所有冲突的快捷键和对应动作。"""
+        values = {key: edit.text().strip() for key, edit in edits.items()}
+
+        # 校验：未设置的项
+        empty_keys = [key for key, v in values.items() if not v]
+        if empty_keys:
+            empty_labels = [labels.get(k, k) for k in empty_keys]
+            QMessageBox.warning(
+                self, "输入错误",
+                f"{group_name}中以下项未设置快捷键：\n  • " + "\n  • ".join(empty_labels)
+            )
+            return None
+
+        # 统计每个快捷键被哪些动作使用
+        by_value = {}
+        for key, v in values.items():
+            by_value.setdefault(v, []).append(key)
+
+        # 找出所有冲突组（同一快捷键被 ≥2 个动作使用）
+        conflicts = [(v, keys) for v, keys in by_value.items() if len(keys) > 1]
+        if conflicts:
+            lines = [f"{group_name}中存在以下快捷键冲突：\n"]
+            for v, keys in conflicts:
+                action_labels = "、".join(labels.get(k, k) for k in keys)
+                lines.append(f'  • "{v}"  →  {action_labels}')
+            lines.append("\n请修改后再保存。")
+            QMessageBox.warning(self, "快捷键冲突", "\n".join(lines))
+            return None
+
+        return values
 
     def accept(self):
-        values = self.get_values()
-
-        # 校验：不能为空
-        empty = [key for key, v in values.items() if not v]
-        if empty:
-            QMessageBox.warning(self, "输入错误", "请设置完整的快捷键，不能有空项！")
+        local_values = self._validate(self.local_edits, self.local_labels, "本地快捷键")
+        if local_values is None:
             return
 
-        # 校验：不能重复
-        seen = {}
-        for key, v in values.items():
-            if v in seen:
-                QMessageBox.warning(
-                    self, "快捷键冲突",
-                    f"快捷键 \"{v}\" 被重复使用，请修改后再保存。"
-                )
+        global_values = None
+        if self.global_edits:
+            global_values = self._validate(self.global_edits, self.global_labels, "全局快捷键")
+            if global_values is None:
                 return
-            seen[v] = key
 
-        self.values = values
+        self.local_values = local_values
+        self.global_values = global_values
         super().accept()
 
 
@@ -790,8 +803,13 @@ class MusicPlayer(QMainWindow):
             # 处理元组事件（如热键注册失败通知）
             if isinstance(event, tuple):
                 if event[0] == 'hotkey_failed':
-                    # 显示热键注册失败对话框
-                    QTimer.singleShot(500, self.show_hotkey_failed_dialog)
+                    # 兼容旧格式（数字）和新格式（明细列表）
+                    payload = event[1] if len(event) > 1 else None
+                    failed_items = payload if isinstance(payload, list) else None
+                    QTimer.singleShot(
+                        500,
+                        lambda items=failed_items: self.show_hotkey_failed_dialog(items)
+                    )
             elif event == 'show_window':
                 self.show_window()
             elif event == 'toggle_play':
@@ -801,24 +819,42 @@ class MusicPlayer(QMainWindow):
             elif event == 'next_song':
                 self.next_song()
 
-    def show_hotkey_failed_dialog(self):
-        """显示热键注册失败对话框"""
+    def show_hotkey_failed_dialog(self, failed_items=None):
+        """显示热键注册失败对话框，列出具体被占用的快捷键。
+        :param failed_items: list of (action_key, hotkey_str, reason)
+        """
         # 防止重复弹出
         if self.hotkey_failed_shown:
             return
         self.hotkey_failed_shown = True
 
+        # 把内部 action key 翻译为中文标签
+        label_map = {key: label for key, label, _ in self.GLOBAL_HOTKEY_DEFINITIONS}
+
+        if failed_items:
+            lines = ["以下全局快捷键注册失败：\n"]
+            for action_key, hotkey_str, reason in failed_items:
+                label = label_map.get(action_key, action_key)
+                lines.append(f'  • {label}：{hotkey_str}   ({reason})')
+            lines.append("\n是否打开快捷键设置来自定义新的快捷键组合？")
+            lines.append("\n提示：建议使用 Ctrl+Shift 或 Ctrl+Alt+Shift 组合避免冲突")
+            text = "\n".join(lines)
+        else:
+            text = (
+                "部分或全部全局快捷键被其他程序占用。\n\n"
+                "是否打开快捷键设置来自定义新的快捷键组合？\n\n"
+                "提示：建议使用 Ctrl+Shift 或 Ctrl+Alt+Shift 组合"
+            )
+
         reply = QMessageBox.warning(
             self,
             "全局快捷键注册失败",
-            "部分或全部全局快捷键被其他程序占用。\n\n"
-            "是否打开快捷键设置来自定义新的快捷键组合？\n\n"
-            "提示：建议使用 Ctrl+Shift 或 Ctrl+Alt+Shift 组合",
+            text,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
         if reply == QMessageBox.Yes:
-            self.show_global_hotkey_settings()
+            self.show_shortcut_settings()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -857,18 +893,11 @@ class MusicPlayer(QMainWindow):
         self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)\n智能单曲循环: 自然播放结束时循环，手动切换时随机跳转")
         top_layout.addWidget(self.mode_combo)
         
-        # 本地快捷键设置按钮（程序窗口聚焦时生效）
-        self.local_shortcut_btn = QPushButton("本地快捷键设置")
-        self.local_shortcut_btn.clicked.connect(self.show_local_shortcut_settings)
-        self.local_shortcut_btn.setToolTip("自定义程序窗口聚焦时使用的快捷键")
-        top_layout.addWidget(self.local_shortcut_btn)
-
-        # 全局快捷键设置按钮
-        if GLOBAL_HOTKEY_AVAILABLE:
-            self.global_hotkey_btn = QPushButton("全局快捷键设置")
-            self.global_hotkey_btn.clicked.connect(self.show_global_hotkey_settings)
-            self.global_hotkey_btn.setToolTip("自定义程序后台运行时也可用的快捷键")
-            top_layout.addWidget(self.global_hotkey_btn)
+        # 快捷键设置按钮（包含本地和全局两个分页）
+        self.shortcut_btn = QPushButton("快捷键设置")
+        self.shortcut_btn.clicked.connect(self.show_shortcut_settings)
+        self.shortcut_btn.setToolTip("自定义本地快捷键（窗口聚焦时生效）和全局快捷键（后台也生效）")
+        top_layout.addWidget(self.shortcut_btn)
         
         # 音频设备选择按钮
         self.audio_device_btn = QPushButton("音频设备设置")
@@ -1058,6 +1087,22 @@ class MusicPlayer(QMainWindow):
         ("delete",            "删除选中项",         "Delete",    "delete_current_item"),
     ]
 
+    # 全局快捷键定义表：(key, 显示标签, 默认快捷键)
+    GLOBAL_HOTKEY_DEFINITIONS = [
+        ("show_window",   "显示窗口",  "Ctrl+Alt+Shift+M"),
+        ("toggle_play",   "播放/暂停", "Ctrl+Alt+Shift+P"),
+        ("previous_song", "上一曲",    "Ctrl+Alt+Shift+Left"),
+        ("next_song",     "下一曲",    "Ctrl+Alt+Shift+Right"),
+    ]
+
+    # 全局快捷键 key 到 QSettings 字段名的映射
+    GLOBAL_HOTKEY_SETTINGS_KEYS = {
+        "show_window":   "global_show_key",
+        "toggle_play":   "global_play_key",
+        "previous_song": "global_prev_key",
+        "next_song":     "global_next_key",
+    }
+
     def _load_local_shortcut_values(self):
         """从 QSettings 读取本地快捷键设置，没有则用默认值"""
         values = {}
@@ -1067,7 +1112,7 @@ class MusicPlayer(QMainWindow):
 
     def init_shortcuts(self):
         """初始化本地快捷键（基于定义表 + QSettings）"""
-        # 存放所有 QShortcut 对象，便于后续修改/重置
+        # 存放所有 QShortcut 对象，便于后续修改
         self.local_shortcuts = {}
         values = self._load_local_shortcut_values()
 
@@ -1086,20 +1131,42 @@ class MusicPlayer(QMainWindow):
             if shortcut and key in values:
                 shortcut.setKey(QKeySequence(values[key]))
 
-    def show_local_shortcut_settings(self):
-        """显示本地快捷键设置对话框"""
-        current_values = {
+    def show_shortcut_settings(self):
+        """显示统一的快捷键设置对话框（包含本地和全局两个分页）"""
+        current_local_values = {
             key: self.local_shortcuts[key].key().toString()
             for key, _l, _d, _c in self.LOCAL_SHORTCUT_DEFINITIONS
         }
-        dialog = LocalShortcutDialog(self.LOCAL_SHORTCUT_DEFINITIONS, current_values, self)
+
+        # 全局快捷键（如果可用）
+        global_definitions = None
+        current_global_values = None
+        if self.global_hotkey_process:
+            global_definitions = self.GLOBAL_HOTKEY_DEFINITIONS
+            current_global_values = dict(self.global_hotkey_process.hotkeys)
+
+        dialog = ShortcutSettingsDialog(
+            self.LOCAL_SHORTCUT_DEFINITIONS, current_local_values,
+            global_definitions, current_global_values, self
+        )
+
         if dialog.exec_() == QDialog.Accepted:
-            new_values = dialog.values
-            self.apply_local_shortcuts(new_values)
-            # 持久化
-            for key, v in new_values.items():
+            # 应用并持久化本地快捷键
+            self.apply_local_shortcuts(dialog.local_values)
+            for key, v in dialog.local_values.items():
                 self.settings.setValue(f"local_shortcut_{key}", v)
-            QMessageBox.information(self, "设置成功", "本地快捷键已更新。")
+
+            # 应用并持久化全局快捷键
+            if dialog.global_values is not None and self.global_hotkey_process:
+                self.global_hotkey_process.update_hotkeys(dialog.global_values)
+                for key, v in dialog.global_values.items():
+                    settings_key = self.GLOBAL_HOTKEY_SETTINGS_KEYS.get(key)
+                    if settings_key:
+                        self.settings.setValue(settings_key, v)
+                # 重置失败提示标记，以便下次注册失败时仍可弹窗
+                self.hotkey_failed_shown = False
+
+            QMessageBox.information(self, "设置成功", "快捷键已更新。")
 
     def connect_signals(self):
         """连接信号和槽"""
@@ -1755,45 +1822,6 @@ class MusicPlayer(QMainWindow):
 
     
 
-    def show_global_hotkey_settings(self):
-        """显示全局快捷键设置对话框"""
-        if not self.global_hotkey_process:
-            QMessageBox.warning(self, "错误", "全局快捷键功能不可用")
-            return
-        
-        current_hotkeys = self.global_hotkey_process.hotkeys
-        dialog = GlobalHotkeyDialog(
-            current_hotkeys['show_window'], 
-            current_hotkeys['toggle_play'], 
-            current_hotkeys['previous_song'], 
-            current_hotkeys['next_song'], 
-            self
-        )
-        
-        if dialog.exec_() == QDialog.Accepted:
-            new_hotkeys = {
-                'show_window': dialog.show_key,
-                'toggle_play': dialog.play_key,
-                'previous_song': dialog.prev_key,
-                'next_song': dialog.next_key
-            }
-            
-            # 更新进程中的快捷键
-            self.global_hotkey_process.update_hotkeys(new_hotkeys)
-            
-            # 保存设置
-            self.settings.setValue("global_show_key", new_hotkeys['show_window'])
-            self.settings.setValue("global_play_key", new_hotkeys['toggle_play'])
-            self.settings.setValue("global_prev_key", new_hotkeys['previous_song'])
-            self.settings.setValue("global_next_key", new_hotkeys['next_song'])
-            
-            QMessageBox.information(self, "设置成功", 
-                f"全局快捷键已更新:\n"
-                f"显示窗口: {new_hotkeys['show_window']}\n"
-                f"播放/暂停: {new_hotkeys['toggle_play']}\n"
-                f"上一曲: {new_hotkeys['previous_song']}\n"
-                f"下一曲: {new_hotkeys['next_song']}")
-    
     def check_hotkey_conflicts(self):
         """检查快捷键冲突并提供解决方案"""
         # 此方法现在由独立进程处理，主窗口不需要特别处理
