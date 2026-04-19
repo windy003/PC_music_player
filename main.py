@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QSettings, QEvent
 from PyQt5.QtGui import QIcon, QPixmap, QFont, QKeySequence
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent, QMediaPlaylist
+import json
 import pygame
 import mutagen
 from mutagen.mp3 import MP3
@@ -708,7 +709,14 @@ class MusicPlayer(QMainWindow):
         self.history_index = -1
         
         # 初始化设置
-        self.settings = QSettings("MusicPlayer", "PlaylistMemory")
+        # 设置文件保存到程序所在目录
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+        settings_path = os.path.join(app_dir, "settings.ini")
+        self.settings = QSettings(settings_path, QSettings.IniFormat)
+        self.settings.setIniCodec("UTF-8")
         
         # 全局快捷键进程管理器
         self.global_hotkey_process = None
@@ -717,13 +725,6 @@ class MusicPlayer(QMainWindow):
             self.global_hotkey_process = GlobalHotkeyProcess()
             
             # 从设置中加载快捷键（默认使用 Ctrl+Alt+Shift 避免冲突）
-            old_show_key = self.settings.value("global_show_key", "", type=str)
-            if old_show_key and not old_show_key.startswith("Ctrl+Alt+Shift"):
-                self.settings.remove("global_show_key")
-                self.settings.remove("global_play_key")
-                self.settings.remove("global_prev_key")
-                self.settings.remove("global_next_key")
-
             hotkeys = {
                 'show_window': self.settings.value("global_show_key", "Ctrl+Alt+Shift+M", type=str),
                 'toggle_play': self.settings.value("global_play_key", "Ctrl+Alt+Shift+P", type=str),
@@ -1195,7 +1196,7 @@ class MusicPlayer(QMainWindow):
             audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
             file_paths = []
 
-            for root, dirs, files in os.walk(folder_path):
+            for root, dirs, files in os.walk(folder_path, followlinks=True):
                 for file in files:
                     if any(file.lower().endswith(ext) for ext in audio_extensions):
                         file_paths.append(os.path.join(root, file))
@@ -1585,7 +1586,14 @@ class MusicPlayer(QMainWindow):
         """保存当前播放列表"""
         if self.song_list:
             # 保存完整的歌曲信息（包括自定义名称）
-            self.settings.setValue("playlist_full", self.song_list)
+            # 保存前将路径中的反斜杠转为正斜杠，避免双重转义
+            songs_to_save = []
+            for song in self.song_list:
+                song_copy = dict(song)
+                if 'path' in song_copy:
+                    song_copy['path'] = song_copy['path'].replace('\\', '/')
+                songs_to_save.append(song_copy)
+            self.settings.setValue("playlist_full", json.dumps(songs_to_save, ensure_ascii=False))
 
             # 保存当前播放位置
             self.settings.setValue("current_index", self.current_index)
@@ -1601,7 +1609,16 @@ class MusicPlayer(QMainWindow):
 
     def load_last_playlist(self):
         """加载上次的播放列表"""
-        saved_songs = self.settings.value("playlist_full", [])
+        saved_songs_raw = self.settings.value("playlist_full", "")
+        saved_songs = []
+        if saved_songs_raw and isinstance(saved_songs_raw, str):
+            try:
+                saved_songs = json.loads(saved_songs_raw)
+            except (json.JSONDecodeError, TypeError):
+                saved_songs = []
+        elif isinstance(saved_songs_raw, list):
+            # 兼容旧格式
+            saved_songs = saved_songs_raw
 
         if saved_songs and isinstance(saved_songs, list):
             existing_songs = []
