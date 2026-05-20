@@ -1,1 +1,1 @@
-pyinstaller --onefile --windowed --icon="1024x1024.png"     --add-data "1024x1024.png;."    --name "音乐播放器"  main.py
+使用时把settings.ini 这个文件从myNetdisk复制到项目根目录
