@@ -703,7 +703,10 @@ class MusicPlayer(QMainWindow):
         
         # 歌曲信息列表
         self.song_list = []
-        
+
+        # 当前打开的文件夹路径（用于刷新功能）
+        self.current_folder_path = ""
+
         # 播放历史记录（用于上一曲功能）
         self.play_history = []
         self.history_index = -1
@@ -939,12 +942,25 @@ class MusicPlayer(QMainWindow):
         
         left_layout.addLayout(search_layout)
 
-        # 当前文件夹标签
+        # 当前文件夹标签 + 刷新按钮
+        folder_info_layout = QHBoxLayout()
+        folder_info_layout.setContentsMargins(0, 0, 0, 0)
+
         self.folder_label = QLabel("")
         self.folder_label.setStyleSheet("color: #4a90d9; font-size: 18px; padding: 2px 4px;")
         self.folder_label.setAlignment(Qt.AlignLeft)
         self.folder_label.setVisible(False)
-        left_layout.addWidget(self.folder_label)
+        folder_info_layout.addWidget(self.folder_label)
+
+        folder_info_layout.addStretch()
+
+        self.refresh_folder_btn = QPushButton("刷新")
+        self.refresh_folder_btn.setToolTip("重新扫描当前文件夹")
+        self.refresh_folder_btn.clicked.connect(self.refresh_folder)
+        self.refresh_folder_btn.setVisible(False)
+        folder_info_layout.addWidget(self.refresh_folder_btn)
+
+        left_layout.addLayout(folder_info_layout)
 
         # 播放列表
         self.playlist_widget = PlaylistWidget(self) # Pass self as parent
@@ -1191,28 +1207,75 @@ class MusicPlayer(QMainWindow):
     def open_folder(self):
         """打开文件夹"""
         folder_path = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        
-        if folder_path:
-            audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
-            file_paths = []
 
-            for root, dirs, files in os.walk(folder_path, followlinks=True):
-                for file in files:
-                    if any(file.lower().endswith(ext) for ext in audio_extensions):
-                        file_paths.append(os.path.join(root, file))
+        if folder_path:
+            file_paths = self._scan_folder_for_audio(folder_path)
 
             if file_paths:
                 # 清空旧的播放列表
                 self.clear_playlist()
                 self.add_files_to_playlist(file_paths)
-                # 显示文件夹名
-                folder_name = os.path.basename(folder_path)
-                self.folder_label.setText(f"文件夹: {folder_name}")
-                self.folder_label.setVisible(True)
+                # 记录当前文件夹路径，并显示文件夹名与条目数
+                self.current_folder_path = folder_path
+                self._update_folder_label(folder_path, len(file_paths))
                 # 保存播放列表
                 self.save_playlist()
             else:
                 QMessageBox.information(self, "提示", "所选文件夹中没有找到音频文件")
+
+    def _scan_folder_for_audio(self, folder_path):
+        """扫描文件夹获取所有音频文件路径"""
+        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
+        file_paths = []
+        for root, dirs, files in os.walk(folder_path, followlinks=True):
+            for file in files:
+                if any(file.lower().endswith(ext) for ext in audio_extensions):
+                    file_paths.append(os.path.join(root, file))
+        return file_paths
+
+    def _update_folder_label(self, folder_path, count):
+        """更新文件夹标签显示（名称 + 条目数）并显示刷新按钮"""
+        folder_name = os.path.basename(folder_path) or folder_path
+        self.folder_label.setText(f"文件夹: {folder_name} ({count} 首)")
+        self.folder_label.setVisible(True)
+        self.refresh_folder_btn.setVisible(True)
+
+    def refresh_folder(self):
+        """重新扫描当前文件夹"""
+        if not self.current_folder_path or not os.path.isdir(self.current_folder_path):
+            QMessageBox.information(self, "提示", "当前没有可刷新的文件夹")
+            return
+
+        # 记录当前播放歌曲路径，刷新后尽量保留选中
+        current_song_path = ""
+        if 0 <= self.current_index < len(self.song_list):
+            current_song_path = self.song_list[self.current_index].get('path', '')
+
+        file_paths = self._scan_folder_for_audio(self.current_folder_path)
+
+        if not file_paths:
+            QMessageBox.information(self, "提示", "当前文件夹中没有找到音频文件")
+            return
+
+        # 仅清空列表数据与 UI，不停止当前播放
+        self.song_list.clear()
+        self.playlist_widget.clear()
+        self.add_files_to_playlist(file_paths)
+
+        # 恢复当前播放歌曲的索引（如果还在）
+        if current_song_path:
+            for i, song in enumerate(self.song_list):
+                if song.get('path') == current_song_path:
+                    self.current_index = i
+                    self.playlist_widget.setCurrentRow(i)
+                    break
+            else:
+                self.current_index = -1
+        else:
+            self.current_index = -1
+
+        self._update_folder_label(self.current_folder_path, len(file_paths))
+        self.save_playlist()
 
     def clear_playlist(self):
         """清空播放列表"""
@@ -1240,6 +1303,8 @@ class MusicPlayer(QMainWindow):
         self.play_btn.setText("播放 (Alt+P/空格)")
         self.folder_label.setText("")
         self.folder_label.setVisible(False)
+        self.refresh_folder_btn.setVisible(False)
+        self.current_folder_path = ""
 
     def clear_playlist_and_settings(self):
         """清空播放列表并删除保存的设置"""
@@ -1251,6 +1316,7 @@ class MusicPlayer(QMainWindow):
         self.settings.remove("playlist")
         self.settings.remove("current_index")
         self.settings.remove("folder_label")
+        self.settings.remove("current_folder_path")
 
 
     def add_files_to_playlist(self, file_paths):
@@ -1603,9 +1669,10 @@ class MusicPlayer(QMainWindow):
 
             self.settings.setValue("volume", self.volume)
 
-            # 保存当前文件夹名
+            # 保存当前文件夹名与文件夹路径
             folder_name = self.folder_label.text()
             self.settings.setValue("folder_label", folder_name)
+            self.settings.setValue("current_folder_path", self.current_folder_path)
 
     def load_last_playlist(self):
         """加载上次的播放列表"""
@@ -1647,8 +1714,28 @@ class MusicPlayer(QMainWindow):
                     self.volume_slider.setValue(volume)
                     pygame.mixer.music.set_volume(volume / 100.0)
 
+                # 恢复当前文件夹路径
+                self.current_folder_path = self.settings.value("current_folder_path", "") or ""
+
+                # 若旧 settings 没有保存路径，尝试从歌曲列表推断公共父目录作为兜底
+                if not self.current_folder_path and self.song_list:
+                    try:
+                        paths = [s['path'] for s in self.song_list if 'path' in s]
+                        if paths:
+                            common = os.path.commonpath(paths)
+                            if common and os.path.isdir(common):
+                                self.current_folder_path = common
+                    except ValueError:
+                        # 不同盘符时 commonpath 抛 ValueError，忽略
+                        pass
+
                 folder_name = self.settings.value("folder_label", "")
-                if folder_name:
+                if self.current_folder_path:
+                    base_name = os.path.basename(self.current_folder_path) or self.current_folder_path
+                    self.folder_label.setText(f"文件夹: {base_name} ({len(self.song_list)} 首)")
+                    self.folder_label.setVisible(True)
+                    self.refresh_folder_btn.setVisible(True)
+                elif folder_name:
                     self.folder_label.setText(folder_name)
                     self.folder_label.setVisible(True)
         else:
