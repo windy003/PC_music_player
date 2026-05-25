@@ -8,3 +8,4 @@ dist/
 *.pyz
 *.pywz
 *.pyzw
+settings.ini
