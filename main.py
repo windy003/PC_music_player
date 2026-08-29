@@ -504,7 +504,17 @@ class ShortcutSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("快捷键设置")
         self.setModal(True)
-        self.resize(520, 640)
+
+        # 根据屏幕可用大小限制对话框尺寸，避免在高DPI缩放或分辨率较小的
+        # 电脑上，对话框超出屏幕导致底部按钮看不到
+        screen = self.screen() if hasattr(self, 'screen') and self.screen() else QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            width = min(520, available.width() - 40)
+            height = min(640, available.height() - 80)
+        else:
+            width, height = 520, 640
+        self.resize(width, height)
 
         if parent:
             self.setWindowIcon(parent.windowIcon())
@@ -1071,6 +1081,10 @@ class MusicPlayer(QMainWindow):
             tray_menu.addAction(next_action)
 
             tray_menu.addSeparator()
+
+            restart_action = QAction("重启 (&R)", self)
+            restart_action.triggered.connect(self.restart_application)
+            tray_menu.addAction(restart_action)
 
             quit_action = QAction("退出 (&X)", self)
             quit_action.triggered.connect(self.quit_application)
@@ -1992,6 +2006,41 @@ class MusicPlayer(QMainWindow):
 
         QApplication.quit()
 
+    def restart_application(self):
+        """重启应用程序"""
+        # 停止全局快捷键进程
+        if self.global_hotkey_process:
+            self.global_hotkey_process.stop()
+
+        # 停止事件监听定时器
+        if hasattr(self, 'hotkey_event_timer'):
+            self.hotkey_event_timer.stop()
+
+        # 停止 pygame
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+        except:
+            pass
+
+        # 保存当前播放列表
+        self.save_playlist()
+
+        # 隐藏系统托盘图标
+        if self.tray_icon:
+            self.tray_icon.hide()
+
+        try:
+            python = sys.executable
+            if getattr(sys, 'frozen', False):
+                # PyInstaller 打包后，sys.executable 就是程序本身
+                os.execv(python, [python] + sys.argv[1:])
+            else:
+                os.execv(python, [python] + sys.argv)
+        except Exception as e:
+            print(f"重启失败: {e}")
+            QApplication.quit()
+
 
 def main():
     # 不再强制使用WMF后端（可能导致某些文件无法播放）
@@ -2000,6 +2049,12 @@ def main():
     os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.multimedia.*=false'
 
     try:
+        # 启用高DPI缩放，避免在高DPI缩放比例的远程/其他电脑上字体和控件显示过小
+        if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+            QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+            QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
