@@ -1,9 +1,5 @@
-exchange==0.3
-numpy==2.5.2
+mutagen==1.47.0
 pygame==2.6.1
-PyOpenGL==3.1.10
-servicemanager==2.0.10
-setuptools==84.0.0
-timer==0.3.0
-typing_extensions==4.16.0
-pywin32
+PyQt5==5.15.11
+pyqt5_sip==12.17.1
+pywin32==311
