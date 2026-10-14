@@ -652,6 +652,13 @@ class ShortcutSettingsDialog(QDialog):
 
 
 class MusicPlayer(QMainWindow):
+    # 播放模式（数值与 mode_combo 的下标一致）
+    PLAY_MODE_REPEAT = 0     # 智能单曲循环
+    PLAY_MODE_SHUFFLE = 1    # 随机播放
+
+    # 随机播放模式下，当前歌曲之前保留的最大历史记录数（即可以回退的曲数）
+    SHUFFLE_HISTORY_LIMIT = 3
+
     def get_resource_path(self, relative_path):
         """获取资源文件路径，支持PyInstaller打包"""
         try:
@@ -705,8 +712,8 @@ class MusicPlayer(QMainWindow):
         # 设置初始音量 (pygame 音量范围 0.0-1.0)
         pygame.mixer.music.set_volume(self.volume / 100.0)
         
-        # 播放模式 0:顺序播放 1:单曲循环 2:随机播放
-        self.play_mode = 0
+        # 播放模式，取值见 PLAY_MODE_* 常量
+        self.play_mode = self.PLAY_MODE_REPEAT
         
         # 单曲循环模式下的用户操作标记
         self.user_manual_skip = False
@@ -717,9 +724,15 @@ class MusicPlayer(QMainWindow):
         # 当前打开的文件夹路径（用于刷新功能）
         self.current_folder_path = ""
 
-        # 播放历史记录（用于上一曲功能）
+        # 播放历史记录（顺序/单曲循环模式下的上一曲功能）
         self.play_history = []
         self.history_index = -1
+
+        # 随机播放历史：按播放顺序记录歌曲路径，游标指向当前歌曲。
+        # 游标之前最多保留 SHUFFLE_HISTORY_LIMIT 首（上一曲），
+        # 游标之后的记录来自用户回退后仍保留的“下一曲”。
+        self.shuffle_history = []
+        self.shuffle_cursor = -1
         
         # 初始化设置
         # 设置文件保存到程序所在目录
@@ -902,7 +915,7 @@ class MusicPlayer(QMainWindow):
         top_layout.addWidget(mode_label)
         
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["顺序播放", "智能单曲循环", "随机播放"])
+        self.mode_combo.addItems(["智能单曲循环", "随机播放"])
         self.mode_combo.currentIndexChanged.connect(self.change_play_mode)
         self.mode_combo.setToolTip("播放模式: Alt+M(循环切换) Alt+L(打开下拉菜单)\n智能单曲循环: 自然播放结束时循环，手动切换时随机跳转")
         top_layout.addWidget(self.mode_combo)
@@ -1300,6 +1313,7 @@ class MusicPlayer(QMainWindow):
         self.song_list.clear()
         self.playlist_widget.clear()
         self.play_history.clear()
+        self.reset_shuffle_history()
 
         # 重置播放状态
         self.current_position = 0
@@ -1395,7 +1409,10 @@ class MusicPlayer(QMainWindow):
         # 重置手动跳转标记
         self.user_manual_skip = False
         # 记录到播放历史
-        self.add_to_history(index)
+        if self.play_mode == self.PLAY_MODE_SHUFFLE:
+            self.record_shuffle_song(index)
+        else:
+            self.add_to_history(index)
 
     def play_song_at_index(self, index):
         """播放指定索引的歌曲"""
@@ -1433,54 +1450,72 @@ class MusicPlayer(QMainWindow):
                 elif len(self.song_list) > 0:
                     play_index = self.current_index if self.current_index >= 0 else 0
                     self.play_song_at_index(play_index)
+                    if self.play_mode == self.PLAY_MODE_SHUFFLE:
+                        self.record_shuffle_song(play_index)
         except Exception as e:
             print(f"toggle_play 错误: {e}")
 
     def previous_song(self):
-        """上一曲 - 从历史记录中获取上一曲"""
-        # 尝试从历史记录获取上一曲
-        prev_index = self.get_previous_from_history()
-        if prev_index is not None:
-            self.play_song_at_index(prev_index)
-        else:
-            # 如果没有历史记录，随机播放一首歌
-            if len(self.song_list) > 0:
-                random_index = random.randint(0, len(self.song_list) - 1)
-                # 避免选择相同的歌曲
-                while random_index == self.current_index and len(self.song_list) > 1:
-                    random_index = random.randint(0, len(self.song_list) - 1)
+        """上一曲"""
+        if self.play_mode == self.PLAY_MODE_SHUFFLE:
+            # 随机播放：沿播放历史回退，可准确回到之前听过的歌曲
+            prev_index = self.shuffle_previous_index()
+            if prev_index is not None:
+                self.play_song_at_index(prev_index)
+            elif self.current_index >= 0:
+                # 没有更早的记录时，重播当前歌曲
+                self.play_song_at_index(self.current_index)
+            elif self.song_list:
+                # 还没有开始播放，随便挑一首作为起点
+                random_index = self._pick_random_index()
                 self.play_song_at_index(random_index)
+                self.record_shuffle_song(random_index)
+            return
+
+        # 智能单曲循环模式：从历史记录中获取上一曲
+        prev_index = self.get_previous_from_history()
+        if prev_index is not None and 0 <= prev_index < len(self.song_list):
+            self.play_song_at_index(prev_index)
+        elif self.song_list:
+            # 如果没有历史记录，随机播放一首歌
+            self.play_song_at_index(self._pick_random_index())
 
     def next_song(self):
-        """下一曲 - 随机播放下一曲"""
-        if len(self.song_list) > 0:
-            # 记录当前播放的歌曲到历史记录
-            if self.current_index >= 0:
-                self.add_to_history(self.current_index)
+        """下一曲"""
+        if not self.song_list:
+            return
 
-            # 随机选择下一曲
-            random_index = random.randint(0, len(self.song_list) - 1)
-            # 避免选择相同的歌曲（如果列表中有多首歌）
-            while random_index == self.current_index and len(self.song_list) > 1:
-                random_index = random.randint(0, len(self.song_list) - 1)
+        if self.play_mode == self.PLAY_MODE_SHUFFLE:
+            # 随机播放：优先沿历史前进，回退后再前进可准确回到原来的歌曲；
+            # 已经走到记录末尾时才随机挑选一首新歌并记入历史
+            next_index = self.shuffle_next_index()
+            if next_index is None:
+                next_index = self._pick_random_index()
+                self.play_song_at_index(next_index)
+                self.record_shuffle_song(next_index)
+            else:
+                self.play_song_at_index(next_index)
+            return
 
-            self.play_song_at_index(random_index)
-
-    def play_random_song(self):
-        """播放随机歌曲"""
-        if len(self.song_list) > 0:
-            random_index = random.randint(0, len(self.song_list) - 1)
-            self.play_song_at_index(random_index)
-            self.add_to_history(random_index)
+        # 智能单曲循环模式：保持原有行为（随机下一曲）
+        if self.current_index >= 0:
+            self.add_to_history(self.current_index)
+        self.play_song_at_index(self._pick_random_index())
 
     def change_play_mode(self, index):
         """改变播放模式"""
         self.play_mode = index
-        if index == 1:  # 单曲循环（智能模式）
+        if index == self.PLAY_MODE_REPEAT:  # 单曲循环（智能模式）
             self.user_manual_skip = False  # 重置手动跳转标记
 
+        # 进入随机模式时以当前歌曲为起点重建历史，其他模式清空随机历史
+        if index == self.PLAY_MODE_SHUFFLE:
+            self.reset_shuffle_history(self.current_index)
+        else:
+            self.reset_shuffle_history()
+
         # 保存播放模式
-        self.settings.setValue("play_mode", self.play_mode)
+        self.settings.setValue("play_mode_v2", self.play_mode)
 
     def change_volume(self, value):
         """改变音量"""
@@ -1516,7 +1551,7 @@ class MusicPlayer(QMainWindow):
     def cycle_play_mode(self):
         """循环切换播放模式"""
         current_mode = self.mode_combo.currentIndex()
-        next_mode = (current_mode + 1) % 3
+        next_mode = (current_mode + 1) % self.mode_combo.count()
         self.mode_combo.setCurrentIndex(next_mode)
         # 重置手动跳转标记
         self.user_manual_skip = False
@@ -1564,7 +1599,7 @@ class MusicPlayer(QMainWindow):
 
     def smart_next_shortcut(self):
         """Alt+右方向键: 智能单曲循环模式下的随机下一曲"""
-        if self.play_mode == 1:  # 智能单曲循环模式
+        if self.play_mode == self.PLAY_MODE_REPEAT:  # 智能单曲循环模式
             self.user_manual_skip = True
             self.smart_next_song()
         else:
@@ -1604,17 +1639,11 @@ class MusicPlayer(QMainWindow):
     def on_song_finished(self):
         """歌曲播放结束"""
         self.is_playing = False
-        if self.play_mode == 0:  # 顺序播放
-            # 播放下一首（顺序）
-            next_index = self.current_index + 1
-            if next_index < len(self.song_list):
-                self.play_song_at_index(next_index)
-            else:
-                self.play_btn.setText("播放 (Alt+P/空格)")
-        elif self.play_mode == 1:  # 单曲循环
+        if self.play_mode == self.PLAY_MODE_SHUFFLE:  # 随机播放
+            # 与手动“下一曲”一致：优先沿历史前进，走到记录末尾才随机挑新歌
+            self.next_song()
+        else:  # 智能单曲循环
             self.play_song_at_index(self.current_index)
-        elif self.play_mode == 2:  # 随机播放
-            self.play_random_song()
 
     def position_changed(self, position):
         """播放位置改变"""
@@ -1679,7 +1708,7 @@ class MusicPlayer(QMainWindow):
             self.settings.setValue("current_index", self.current_index)
 
             # 保存播放模式
-            self.settings.setValue("play_mode", self.play_mode)
+            self.settings.setValue("play_mode_v2", self.play_mode)
 
             self.settings.setValue("volume", self.volume)
 
@@ -1687,6 +1716,32 @@ class MusicPlayer(QMainWindow):
             folder_name = self.folder_label.text()
             self.settings.setValue("folder_label", folder_name)
             self.settings.setValue("current_folder_path", self.current_folder_path)
+
+    def _load_saved_play_mode(self):
+        """读取上次的播放模式。
+
+        旧版本把模式存在 play_mode 里（0=顺序播放 1=单曲循环 2=随机播放），
+        由于顺序播放已移除，数值含义发生了变化，所以改用新的键 play_mode_v2，
+        并在首次运行时按旧含义做一次迁移。
+        """
+        if self.settings.contains("play_mode_v2"):
+            return self.settings.value("play_mode_v2", self.PLAY_MODE_REPEAT, type=int)
+
+        # 旧值：0=顺序播放（已移除，迁移为随机播放）1=单曲循环 2=随机播放
+        # 注意：不能靠 value() 的默认值判断“没有记录”，因为 type=int 会把
+        # 缺失的键一律转成 0，与旧值 0（顺序播放）无法区分，必须用 contains()。
+        if self.settings.contains("play_mode"):
+            legacy_mode = self.settings.value("play_mode", 0, type=int)
+            legacy_map = {
+                0: self.PLAY_MODE_SHUFFLE,
+                1: self.PLAY_MODE_REPEAT,
+                2: self.PLAY_MODE_SHUFFLE,
+            }
+            if legacy_mode in legacy_map:
+                return legacy_map[legacy_mode]
+
+        # 没有任何记录（首次运行）时用下拉框第一项作为默认模式
+        return self.PLAY_MODE_REPEAT
 
     def load_last_playlist(self):
         """加载上次的播放列表"""
@@ -1719,8 +1774,8 @@ class MusicPlayer(QMainWindow):
                 if 0 <= current_index < len(self.song_list):
                     self.current_index = current_index
 
-                play_mode = self.settings.value("play_mode", 0, type=int)
-                if 0 <= play_mode <= 2:
+                play_mode = self._load_saved_play_mode()
+                if 0 <= play_mode < self.mode_combo.count():
                     self.mode_combo.setCurrentIndex(play_mode)
 
                 volume = self.settings.value("volume", 70, type=int)
@@ -1811,6 +1866,95 @@ class MusicPlayer(QMainWindow):
             # 如果没有正在播放的歌曲，显示提示
             QMessageBox.information(self, "提示", "当前没有正在播放的歌曲")
     
+    def _pick_random_index(self):
+        """随机挑一首歌的索引，尽量避免与当前播放的歌曲相同"""
+        if not self.song_list:
+            return -1
+        if len(self.song_list) == 1:
+            return 0
+        random_index = random.randint(0, len(self.song_list) - 1)
+        while random_index == self.current_index:
+            random_index = random.randint(0, len(self.song_list) - 1)
+        return random_index
+
+    # ==================== 随机播放历史（上一曲/下一曲准确切换） ====================
+
+    def reset_shuffle_history(self, current_index=None):
+        """重置随机播放历史；传入当前歌曲索引可作为起点"""
+        self.shuffle_history = []
+        self.shuffle_cursor = -1
+        if current_index is not None and 0 <= current_index < len(self.song_list):
+            path = self.song_list[current_index].get('path')
+            if path:
+                self.shuffle_history = [path]
+                self.shuffle_cursor = 0
+
+    def record_shuffle_song(self, index):
+        """随机模式下记录一首“新播放”的歌曲。
+
+        会先丢弃游标之后的记录（即回退后保留的下一曲），再把新歌追加到末尾，
+        所以随机播放时按“下一曲”能优先重放之前回退时经过的歌曲。
+        """
+        if not (0 <= index < len(self.song_list)):
+            return
+        path = self.song_list[index].get('path')
+        if not path:
+            return
+
+        if 0 <= self.shuffle_cursor < len(self.shuffle_history):
+            del self.shuffle_history[self.shuffle_cursor + 1:]
+        self.shuffle_history.append(path)
+        self.shuffle_cursor = len(self.shuffle_history) - 1
+        self._trim_shuffle_history()
+
+    def _trim_shuffle_history(self):
+        """只保留游标之前最近 SHUFFLE_HISTORY_LIMIT 条记录"""
+        if self.shuffle_cursor > self.SHUFFLE_HISTORY_LIMIT:
+            drop = self.shuffle_cursor - self.SHUFFLE_HISTORY_LIMIT
+            del self.shuffle_history[:drop]
+            self.shuffle_cursor -= drop
+
+    def _index_of_song_path(self, path):
+        """根据歌曲路径查找当前索引，找不到返回 -1"""
+        for i, song in enumerate(self.song_list):
+            if song.get('path') == path:
+                return i
+        return -1
+
+    def shuffle_previous_index(self):
+        """随机模式：返回历史记录中的上一首索引，没有更早的记录时返回 None"""
+        while self.shuffle_cursor > 0:
+            self.shuffle_cursor -= 1
+            index = self._index_of_song_path(self.shuffle_history[self.shuffle_cursor])
+            if index >= 0:
+                return index
+            # 该歌曲已被删除，移除记录后继续向前查找
+            del self.shuffle_history[self.shuffle_cursor]
+        return None
+
+    def shuffle_next_index(self):
+        """随机模式：返回历史记录中的下一首索引，没有更后的记录时返回 None"""
+        while self.shuffle_cursor < len(self.shuffle_history) - 1:
+            self.shuffle_cursor += 1
+            index = self._index_of_song_path(self.shuffle_history[self.shuffle_cursor])
+            if index >= 0:
+                return index
+            # 该歌曲已被删除，移除记录后继续向后查找
+            del self.shuffle_history[self.shuffle_cursor]
+            self.shuffle_cursor -= 1
+        return None
+
+    def remove_from_shuffle_history(self, path):
+        """歌曲被删除后，同步清理随机播放历史中的记录"""
+        if not path or path not in self.shuffle_history:
+            return
+        while path in self.shuffle_history:
+            pos = self.shuffle_history.index(path)
+            del self.shuffle_history[pos]
+            if pos <= self.shuffle_cursor:
+                self.shuffle_cursor -= 1
+        self.shuffle_cursor = min(self.shuffle_cursor, len(self.shuffle_history) - 1)
+
     def add_to_history(self, index):
         """记录上一曲 - 只保存最后一首歌曲"""
         # 只保存当前歌曲作为"上一曲"
@@ -1834,11 +1978,7 @@ class MusicPlayer(QMainWindow):
             if self.current_index >= 0:
                 self.add_to_history(self.current_index)
 
-            random_index = random.randint(0, len(self.song_list) - 1)
-            # 避免选择相同的歌曲
-            while random_index == self.current_index and len(self.song_list) > 1:
-                random_index = random.randint(0, len(self.song_list) - 1)
-            self.play_song_at_index(random_index)
+            self.play_song_at_index(self._pick_random_index())
 
     def rename_current_item(self):
         """重命名当前选中的项目"""
@@ -1920,12 +2060,20 @@ class MusicPlayer(QMainWindow):
         if reply == QMessageBox.Yes:
             item_index = self.playlist_widget.row(item)
             if item_index >= 0:
+                # 记录被删除歌曲的路径，用于同步清理随机播放历史
+                removed_path = ""
+                if 0 <= item_index < len(self.song_list):
+                    removed_path = self.song_list[item_index].get('path', '')
+
                 # 从UI列表中删除
                 self.playlist_widget.takeItem(item_index)
 
                 # 从歌曲信息列表中删除
                 if item_index < len(self.song_list):
                     del self.song_list[item_index]
+
+                # 同步清理随机播放历史中已删除的歌曲
+                self.remove_from_shuffle_history(removed_path)
 
                 # 如果删除的是当前播放的歌曲，调整索引
                 if item_index == self.current_index:
